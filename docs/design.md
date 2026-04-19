@@ -123,6 +123,33 @@ internal/classify/            Probe results → NAT-type verdict
 internal/report/              Verdict → human text or JSON
 ```
 
+### Data flow
+
+```
+args
+ │
+ ▼
+cli.Run ─────────► probe.Probe  (×N concurrent, one per server)
+ │                    │
+ │◄── probe.Result ───┘
+ │
+ ▼
+classify.Classify ─► Verdict ─► report.Render ─► stdout / stderr
+                       │
+                       └─► exit code (0 / 1 / 2)
+```
+
+```mermaid
+flowchart TD
+    args([args]) --> cli[cli.Run]
+    cli -->|one probe per server| probe[probe.Probe]
+    probe -->|Result| cli
+    cli -->|all results| classify[classify.Classify]
+    classify -->|Verdict| report[report.Render]
+    report --> out([stdout / stderr])
+    classify -->|exit code| ex([os.Exit])
+```
+
 ## Dependencies
 
 - **Runtime:** `github.com/pion/stun/v3` (latest stable). Nothing else for v0.1.
