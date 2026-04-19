@@ -1,17 +1,20 @@
 // Command natcheck diagnoses NAT type using STUN probes.
 //
-// Scaffold only. See docs/design.md for the spec.
+// See docs/design.md for the spec.
 package main
 
 import (
-	"fmt"
+	"context"
 	"os"
+
+	"github.com/1mb-dev/natcheck/internal/cli"
 )
 
-var version = "v0.1.0-dev"
+// version is overridden at build time via ldflags:
+//   go build -ldflags "-X main.version=v0.1.0"
+var version = "dev"
 
 func main() {
-	fmt.Fprintf(os.Stderr, "natcheck %s - scaffold only, not implemented yet\n", version)
-	fmt.Fprintln(os.Stderr, "See docs/design.md for the spec.")
-	os.Exit(2)
+	cli.Version = version
+	os.Exit(cli.Run(context.Background(), os.Args[1:], os.Stdout, os.Stderr))
 }
