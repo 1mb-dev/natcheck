@@ -9,24 +9,33 @@ import (
 	"github.com/pion/stun/v3"
 )
 
-// fakeSTUN is a minimal in-process STUN responder for tests. It reads UDP
-// packets, decodes them as STUN messages, and responds with a Binding Success
-// + XOR-MAPPED-ADDRESS set to the sender's address. delay > 0 simulates a slow
-// server; drop = true simulates a silent server that never responds.
+// fakeBehavior selects how the in-process fake STUN responder replies.
+type fakeBehavior int
+
+const (
+	behaviorNormal     fakeBehavior = iota // build a valid BindingSuccess with correct XOR-MAPPED-ADDRESS
+	behaviorDrop                           // never respond
+	behaviorWrongTxID                      // BindingSuccess with a different transaction ID
+	behaviorWrongType                      // respond with BindingError instead of BindingSuccess
+	behaviorOmitMapped                     // BindingSuccess without XOR-MAPPED-ADDRESS attribute
+	behaviorGarbled                        // write random bytes that don't parse as STUN
+)
+
+// fakeSTUN is an in-process STUN responder for tests. No network access required.
 type fakeSTUN struct {
-	conn  net.PacketConn
-	delay time.Duration
-	drop  bool
-	done  chan struct{}
+	conn     net.PacketConn
+	delay    time.Duration
+	behavior fakeBehavior
+	done     chan struct{}
 }
 
-func newFakeSTUN(t *testing.T, delay time.Duration, drop bool) *fakeSTUN {
+func newFakeSTUN(t *testing.T, delay time.Duration, behavior fakeBehavior) *fakeSTUN {
 	t.Helper()
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	f := &fakeSTUN{conn: conn, delay: delay, drop: drop, done: make(chan struct{})}
+	f := &fakeSTUN{conn: conn, delay: delay, behavior: behavior, done: make(chan struct{})}
 	go f.serve()
 	t.Cleanup(func() {
 		close(f.done)
@@ -53,7 +62,7 @@ func (f *fakeSTUN) serve() {
 		if err != nil {
 			continue
 		}
-		if f.drop {
+		if f.behavior == behaviorDrop {
 			continue
 		}
 		if f.delay > 0 {
@@ -67,20 +76,73 @@ func (f *fakeSTUN) serve() {
 		if !ok {
 			continue
 		}
+		respBytes := buildResponse(f.behavior, req, udp)
+		if respBytes == nil {
+			continue
+		}
+		_, _ = f.conn.WriteTo(respBytes, from)
+	}
+}
+
+func buildResponse(behavior fakeBehavior, req *stun.Message, udp *net.UDPAddr) []byte {
+	switch behavior {
+	case behaviorNormal:
 		resp, err := stun.Build(
 			stun.NewTransactionIDSetter(req.TransactionID),
 			stun.BindingSuccess,
 			&stun.XORMappedAddress{IP: udp.IP, Port: udp.Port},
 		)
 		if err != nil {
-			continue
+			return nil
 		}
-		_, _ = f.conn.WriteTo(resp.Raw, from)
+		return resp.Raw
+
+	case behaviorWrongTxID:
+		var wrong [stun.TransactionIDSize]byte
+		for i := range wrong {
+			wrong[i] = 0xAA
+		}
+		resp, err := stun.Build(
+			stun.NewTransactionIDSetter(wrong),
+			stun.BindingSuccess,
+			&stun.XORMappedAddress{IP: udp.IP, Port: udp.Port},
+		)
+		if err != nil {
+			return nil
+		}
+		return resp.Raw
+
+	case behaviorWrongType:
+		resp, err := stun.Build(
+			stun.NewTransactionIDSetter(req.TransactionID),
+			stun.BindingError,
+		)
+		if err != nil {
+			return nil
+		}
+		return resp.Raw
+
+	case behaviorOmitMapped:
+		resp, err := stun.Build(
+			stun.NewTransactionIDSetter(req.TransactionID),
+			stun.BindingSuccess,
+		)
+		if err != nil {
+			return nil
+		}
+		return resp.Raw
+
+	case behaviorGarbled:
+		// 8 bytes of non-STUN noise; too short to parse as a STUN message.
+		return []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
+
+	default:
+		return nil
 	}
 }
 
 func TestProbe_Success(t *testing.T) {
-	f := newFakeSTUN(t, 0, false)
+	f := newFakeSTUN(t, 0, behaviorNormal)
 	host, port := f.addr()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -102,7 +164,7 @@ func TestProbe_Success(t *testing.T) {
 }
 
 func TestProbe_TimeoutShorterThanResponse(t *testing.T) {
-	f := newFakeSTUN(t, 300*time.Millisecond, false)
+	f := newFakeSTUN(t, 300*time.Millisecond, behaviorNormal)
 	host, port := f.addr()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -121,7 +183,7 @@ func TestProbe_TimeoutShorterThanResponse(t *testing.T) {
 }
 
 func TestProbe_ServerSilent(t *testing.T) {
-	f := newFakeSTUN(t, 0, true)
+	f := newFakeSTUN(t, 0, behaviorDrop)
 	host, port := f.addr()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
@@ -134,7 +196,7 @@ func TestProbe_ServerSilent(t *testing.T) {
 }
 
 func TestProbe_ServerNotListening(t *testing.T) {
-	// Grab a port then free it so we know no one is listening there.
+	// Grab a port then free it so nothing listens there.
 	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -166,5 +228,60 @@ func TestProbe_MalformedHostPort(t *testing.T) {
 		if res.Err == nil {
 			t.Fatalf("expected error for %+v, got success", c)
 		}
+	}
+}
+
+// Adversarial response paths: responder returns malformed / unexpected STUN
+// messages. Probe must surface an error, never panic, never hang.
+
+func TestProbe_WrongTransactionID(t *testing.T) {
+	f := newFakeSTUN(t, 0, behaviorWrongTxID)
+	host, port := f.addr()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	if res.Err == nil {
+		t.Fatal("expected error on transaction-ID mismatch, got success")
+	}
+}
+
+func TestProbe_WrongMessageType(t *testing.T) {
+	f := newFakeSTUN(t, 0, behaviorWrongType)
+	host, port := f.addr()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	if res.Err == nil {
+		t.Fatal("expected error on unexpected STUN message type, got success")
+	}
+}
+
+func TestProbe_MissingMappedAddress(t *testing.T) {
+	f := newFakeSTUN(t, 0, behaviorOmitMapped)
+	host, port := f.addr()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	if res.Err == nil {
+		t.Fatal("expected error on missing XOR-MAPPED-ADDRESS, got success")
+	}
+}
+
+func TestProbe_GarbledResponse(t *testing.T) {
+	f := newFakeSTUN(t, 0, behaviorGarbled)
+	host, port := f.addr()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	if res.Err == nil {
+		t.Fatal("expected error on garbled response, got success")
 	}
 }
