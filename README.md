@@ -2,7 +2,7 @@
 
 NAT type diagnosis CLI. One command tells you why your WebRTC, peer-to-peer, or VPN setup struggles.
 
-> Status: pre-v0.1 (scaffolding). See [`docs/PRD.md`](docs/PRD.md), [`docs/TRD.md`](docs/TRD.md), [`docs/HANDOFF.md`](docs/HANDOFF.md).
+> Status: pre-v0.1 (implementation in progress). See [`docs/design.md`](docs/design.md).
 
 ## Why
 

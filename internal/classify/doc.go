@@ -4,5 +4,5 @@
 // (Endpoint-Independent, Address-Dependent, Address and Port-Dependent) and
 // emits legacy RFC 3489 terms ("cone", "symmetric") for human readers.
 //
-// Scaffold only. See docs/TRD.md for the target API.
+// Scaffold only. See docs/design.md for the target API.
 package classify
