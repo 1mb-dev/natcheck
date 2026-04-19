@@ -4,6 +4,12 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-04-19
+
+### Fixed
+
+- `natcheck --version` now reports the correct tag when installed via `go install github.com/1mb-dev/natcheck/cmd/natcheck@vX.Y.Z`. Previously fell back to `"dev"` because ldflags aren't applied by `go install`. Now resolves via `runtime/debug.ReadBuildInfo` when ldflags are absent.
+
 ## [0.1.0] — 2026-04-19
 
 Initial release. See [`docs/design.md`](docs/design.md) for scope and architecture.
@@ -29,5 +35,6 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
 
-[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.1
 [0.1.0]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.0
