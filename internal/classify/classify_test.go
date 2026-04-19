@@ -242,8 +242,8 @@ func TestClassify(t *testing.T) {
 func TestClassify_NilSafe(t *testing.T) {
 	_ = Classify(nil)
 	_ = Classify([]probe.Result{})
-	_ = Classify([]probe.Result{{}})            // zero-value result
-	_ = Classify([]probe.Result{{}, {}, {}})    // multiple zero-value
+	_ = Classify([]probe.Result{{}})         // zero-value result
+	_ = Classify([]probe.Result{{}, {}, {}}) // multiple zero-value
 }
 
 // TestNATType_String covers every branch.

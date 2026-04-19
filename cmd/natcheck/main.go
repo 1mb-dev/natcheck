@@ -11,7 +11,8 @@ import (
 )
 
 // version is overridden at build time via ldflags:
-//   go build -ldflags "-X main.version=v0.1.0"
+//
+//	go build -ldflags "-X main.version=v0.1.0"
 var version = "dev"
 
 func main() {
