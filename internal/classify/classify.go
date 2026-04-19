@@ -137,8 +137,8 @@ func Classify(results []probe.Result) Verdict {
 			v.Forecast = Forecast{DirectP2P: "unlikely", TURNRequired: true}
 		}
 		applyCGNAT(&v)
-		// v0.1 Linus condition: CGNAT forces forecast=unknown regardless of
-		// observed mapping behavior, pending real-network calibration.
+		// v0.1: CGNAT forces forecast=unknown regardless of observed mapping —
+		// unknown is the honest answer when confident classification isn't possible.
 		if v.CGNAT {
 			v.Forecast = Forecast{DirectP2P: "unknown", TURNRequired: false}
 		}
