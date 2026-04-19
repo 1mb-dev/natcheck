@@ -1,4 +1,4 @@
-.PHONY: build test test-verbose test-coverage lint clean run install help
+.PHONY: setup build test test-verbose test-coverage lint clean run install tidy help
 
 # Build configuration
 BINARY_NAME=natcheck
@@ -27,6 +27,12 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@awk '/^## [a-zA-Z_-]+:/ { sub(/^## /, ""); split($$0, parts, ": "); printf "  %-20s %s\n", parts[1], substr($$0, length(parts[1])+3) }' $(MAKEFILE_LIST)
+
+## setup: Install development tools (golangci-lint v2.9.0)
+setup:
+	@echo "Installing dev tools..."
+	$(GOINSTALL) github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.9.0
+	@echo "Setup complete."
 
 ## build: Build the binary
 build:
