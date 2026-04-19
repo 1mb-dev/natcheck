@@ -22,6 +22,13 @@ Built on [`pion/stun`](https://github.com/pion/stun).
 ## Install
 
 ```bash
+brew tap 1mb-dev/tap
+brew install natcheck
+```
+
+or, on any platform with Go 1.25+:
+
+```bash
 go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
 ```
 
@@ -34,6 +41,10 @@ go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
 | `2`  | probe or flag error |
 
 `$? -ne 2`: tool ran. `$? -eq 0`: direct P2P available.
+
+## Background
+
+- [NAT types and why WebRTC connections fail]({{ '/nat-types/' | relative_url }}) — RFC 5780 mapping, CGNAT, and when to use TURN.
 
 ## Links
 
