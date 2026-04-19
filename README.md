@@ -14,9 +14,20 @@ Built on [`pion/stun`](https://github.com/pion/stun). Pure Go, single static bin
 
 ## Quick start
 
+**Homebrew (recommended on macOS):**
+
+```bash
+brew tap 1mb-dev/tap
+brew install natcheck
+```
+
+**Go install (any platform):**
+
 ```bash
 go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
+```
 
+```bash
 natcheck
 ```
 
