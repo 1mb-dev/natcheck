@@ -1,12 +1,16 @@
 # natcheck
 
-NAT type diagnosis CLI. One command tells you why your WebRTC, peer-to-peer, or VPN setup struggles.
+NAT type diagnosis CLI. One command tells you why your WebRTC, P2P, or VPN connections struggle — and whether TURN is required.
 
-> Status: pre-v0.1 (implementation in progress). See [`docs/design.md`](docs/design.md).
+Built on [`pion/stun`](https://github.com/pion/stun). Pure Go, single static binary. No cgo, no services, no config.
 
-## Why
+> Pre-release (v0.1). Spec: [`docs/design.md`](docs/design.md). Samples: [`docs/samples/`](docs/samples/).
 
-Every WebRTC, P2P, or VPN developer hits the same question: "what kind of NAT am I behind, and will my connections work?" Answering it today means piecing together output from `stun-client`, online tests, and RFC reading. `natcheck` packages the answer into one command with human-readable output and a `--json` mode for scripting.
+## Why natcheck
+
+- **One command, one answer.** No more piecing together `stun-client` output with a dusty online NAT classifier and RFC 5780.
+- **Honest about limits.** v0.1 tests mapping behavior; filtering and hairpinning are deferred to v0.2. CGNAT forecast is `unknown` by default, pending real-network calibration.
+- **Human-readable by default, `--json` on request.** Clean output for terminals, schema-stable JSON for CI.
 
 ## Quick start
 
@@ -16,42 +20,68 @@ go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
 natcheck
 ```
 
-Example output:
+Example output on a healthy home network:
 
 ```
+Direct P2P: likely
 NAT type: Endpoint-Independent Mapping (cone)
 Public endpoint: 203.0.113.45:51820
+
 Probes:
-  stun.l.google.com:19302  rtt=24ms  mapped=203.0.113.45:51820
-  stun.cloudflare.com:3478 rtt=31ms  mapped=203.0.113.45:51820
+  stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
+  stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
 
-WebRTC forecast:
-  Direct P2P: likely
-  TURN required: no
-
-Note: filtering behavior not tested (requires RFC 5780-capable STUN server)
+Filtering not tested (v0.1).
 ```
+
+The `Direct P2P:` line leads so you get the answer on line 1.
 
 ## Flags
 
 | Flag | Purpose |
 |------|---------|
 | `--json` | Emit JSON instead of human-readable report |
-| `--verbose` | Show each STUN transaction |
-| `--server host:port` | Add a custom STUN server (repeatable) |
-| `--timeout duration` | Probe timeout, default 5s |
-| `--version` | Print version |
-| `--help` | Print help |
+| `--verbose` | Log each STUN transaction to stderr |
+| `--server host:port` | Add a custom STUN server (repeatable; overrides defaults) |
+| `--timeout duration` | Total probe timeout (default `5s`) |
+| `--version` | Print version and exit |
+| `--help` | Print flag reference |
 
 ## Exit codes
 
-- `0` - probe succeeded, NAT is P2P-friendly enough
-- `1` - probe succeeded, NAT is hostile to direct P2P (hard NAT or CGNAT)
-- `2` - probe failed (no servers reachable, configuration error)
+| Code | Meaning | When |
+|------|---------|------|
+| `0` | P2P-friendly | `Direct P2P: likely` or `possible` |
+| `1` | P2P-hostile | `Direct P2P: unlikely` or `unknown` |
+| `2` | Probe or flag error | All probes failed, invalid flag, or bad `--server` |
 
-## Stack
+Scripts that ask "did the tool run?" check `$? -ne 2`. Scripts that ask "can I use direct P2P?" check `$? -eq 0`.
 
-Built on [`pion/stun`](https://github.com/pion/stun). Pure Go, no cgo, single binary.
+## CI usage
+
+```bash
+verdict=$(natcheck --json | jq -r '.webrtc_forecast.direct_p2p')
+if [ "$verdict" != "likely" ]; then
+  echo "NAT not P2P-friendly: $verdict"
+  exit 1
+fi
+```
+
+The `--json` schema (`nat_type`, `public_endpoint`, `probes[]`, `webrtc_forecast`, `warnings[]`) is a public contract from v0.1 onward — additive changes only after release. Real captures live under [`docs/samples/`](docs/samples/).
+
+## Limits
+
+v0.1 is explicit about what it does and doesn't test:
+
+- **Mapping behavior — tested.** STUN Binding across multiple servers is the core v0.1 capability.
+- **Filtering behavior — not tested.** Requires RFC 5780 `CHANGE-REQUEST` support, which most public STUN servers don't implement. Deferred to v0.2 (companion server or coturn setup guide).
+- **Hairpinning — not tested.** Requires an echo helper. Deferred to v0.2.
+- **CGNAT forecast — unknown by default.** When the observed public IP falls in `100.64.0.0/10`, v0.1 reports `Direct P2P: unknown` rather than guessing. Real-world CGNAT behavior varies by carrier and hasn't been calibrated. Samples from T-Mobile, Jio, Starlink, and similar networks are welcome — see [`docs/samples/`](docs/samples/).
+- **IPv6 — best-effort.** Officially deferred to v0.3. Works in practice via `pion/stun` + Go's net package when the network supports it, but not exhaustively tested.
+
+## Acknowledgements
+
+Default STUN servers courtesy of Google (`stun.l.google.com:19302`) and Cloudflare (`stun.cloudflare.com:3478`). For high-frequency automation, self-host [coturn](https://github.com/coturn/coturn) and pass it via `--server`.
 
 ## License
 
