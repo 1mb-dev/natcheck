@@ -9,7 +9,7 @@ Built on [`pion/stun`](https://github.com/pion/stun). Pure Go, single static bin
 ## Why natcheck
 
 - **One command, one answer.** No more piecing together `stun-client` output with a dusty online NAT classifier and RFC 5780.
-- **Honest about limits.** v0.1 tests mapping behavior; filtering and hairpinning are deferred to v0.2. CGNAT forecast is `unknown` by default, pending real-network calibration.
+- **Honest outputs.** Reports `unknown` when classification can't be determined from the data, rather than guessing.
 - **Human-readable by default, `--json` on request.** Clean output for terminals, schema-stable JSON for CI.
 
 ## Quick start
@@ -69,15 +69,11 @@ fi
 
 The `--json` schema (`nat_type`, `public_endpoint`, `probes[]`, `webrtc_forecast`, `warnings[]`) is a public contract from v0.1 onward — additive changes only after release. Real captures live under [`docs/samples/`](docs/samples/).
 
-## Limits
+## Scope
 
-v0.1 is explicit about what it does and doesn't test:
+v0.1 classifies NAT mapping behavior (Endpoint-Independent, Address-Dependent, Address-and-Port-Dependent per RFC 5780) and reports a WebRTC direct-P2P forecast. Filtering behavior and hairpinning are out of scope. On CGNAT networks (`100.64.0.0/10`), the forecast is `unknown`. IPv6 works when the network supports it but is not exhaustively tested.
 
-- **Mapping behavior — tested.** STUN Binding across multiple servers is the core v0.1 capability.
-- **Filtering behavior — not tested.** Requires RFC 5780 `CHANGE-REQUEST` support, which most public STUN servers don't implement. Deferred to v0.2 (companion server or coturn setup guide).
-- **Hairpinning — not tested.** Requires an echo helper. Deferred to v0.2.
-- **CGNAT forecast — unknown by default.** When the observed public IP falls in `100.64.0.0/10`, v0.1 reports `Direct P2P: unknown` rather than guessing. Real-world CGNAT behavior varies by carrier and hasn't been calibrated. Samples from T-Mobile, Jio, Starlink, and similar networks are welcome — see [`docs/samples/`](docs/samples/).
-- **IPv6 — best-effort.** Officially deferred to v0.3. Works in practice via `pion/stun` + Go's net package when the network supports it, but not exhaustively tested.
+See [`docs/design.md`](docs/design.md) for full architecture and testing details.
 
 ## Acknowledgements
 

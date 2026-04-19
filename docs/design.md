@@ -51,17 +51,16 @@ In:
 - CGNAT heuristic warning (if mapped IP is in 100.64.0.0/10)
 - Exit codes: 0 (P2P-friendly), 1 (P2P-hostile), 2 (probe error)
 
-Out (deferred):
+Out of scope:
 
-- Filtering behavior (v0.2; requires RFC 5780-capable STUN server — companion `natcheck-server` or coturn setup guide)
-- Hairpinning test (v0.2)
-- TURN probing (v0.3)
-- IPv6 (v0.3 — included if trivial via `pion/stun`, otherwise explicit)
-- Multi-interface enumeration (v0.3)
-- Homebrew tap (v0.1.1)
-- Continuous monitoring / watch mode (maybe; probably never)
-- TUI (not planned)
-- TCP STUN (not planned)
+- Filtering behavior (requires RFC 5780 `CHANGE-REQUEST` support, which most public STUN servers don't implement)
+- Hairpinning test (requires an echo helper)
+- TURN probing
+- IPv6 exhaustive testing (works in practice via `pion/stun` + Go's net package when available, but not a tested contract)
+- Multi-interface enumeration
+- Continuous monitoring / watch mode
+- TUI
+- TCP STUN
 
 ## Non-goals
 
@@ -110,7 +109,7 @@ The JSON schema is a public contract from v0.1 onward; only additive changes aft
 
 - All probes timeout → exit 2, report per-server errors
 - Mapped endpoints disagree across servers → NAT type "Address-Dependent Mapping" (or APDM if we can distinguish; v0.1 reports "ADM or stricter"), exit 1, forecast `unlikely`
-- Mapped IP in `100.64.0.0/10` → warning `cgnat_detected`, forecast `unknown` in v0.1 (upgrades to `possible` or `unlikely` post real-network calibration)
+- Mapped IP in `100.64.0.0/10` → warning `cgnat_detected`, forecast `unknown`
 
 ## Architecture
 
@@ -245,13 +244,11 @@ What v0.1 cannot determine:
 - Filtering behavior (requires `CHANGE-REQUEST`)
 - Hairpinning behavior (requires a helper that echoes to the mapped endpoint)
 
-v0.2 plan: ship `natcheck-server` (or document a coturn setup) that supports RFC 5780 attributes, enabling full mapping + filtering classification.
-
 ## CGNAT detection
 
 If the observed public IP falls in `100.64.0.0/10` (RFC 6598 shared address space), emit warning `cgnat_detected`. CGNAT typically prevents inbound direct P2P but doesn't prevent outbound STUN.
 
-v0.1 forecast policy: `DirectP2P: "unknown"` whenever CGNAT is detected. The `possible` / `unlikely` upgrade gates on observed P2P behavior from a real CGNAT network (T-Mobile / Jio / Starlink) during v0.1 QA. Shipping an unvalidated forecast would break the "honest" value prop — `unknown` is the correct answer when we don't know.
+Forecast on CGNAT: `DirectP2P = "unknown"`. Real-world direct-P2P success on CGNAT varies by carrier; returning `unknown` is the honest answer in the absence of a confident signal.
 
 ## Concurrency model
 
@@ -265,14 +262,14 @@ Probe goroutines run in parallel, one per server, all bounded by a single contex
 - **`internal/cli`:** in-process test with a fake `Prober`; asserts exit codes and orchestration.
 - **`cmd/natcheck`:** no test; entry point is three lines.
 
-No live-network test in CI. Manual verification against real networks — including at least one CGNAT network — before release; sample outputs committed under `docs/samples/`.
+No live-network test in CI. Manual verification against real networks before release; sample outputs committed under `docs/samples/`.
 
 ## Build and release
 
 - `make build` → single binary in repo root, versioned via `-ldflags "-X main.version=..."`
 - `make test` → unit + integration with in-process test server, no network
 - `make lint` → `golangci-lint` (v2.9.0 per 1mb-dev shared CI)
-- Release: `git tag v0.1.0`, push. `goreleaser` later (v0.2+).
+- Release: `git tag v0.1.0`, push.
 
 ## Non-functional targets
 
@@ -287,11 +284,5 @@ No live-network test in CI. Manual verification against real networks — includ
 - No private keys, no credentials, no user data sent to STUN servers beyond the standard Binding request.
 - `--server` accepts user input; validate `host:port` shape before handing to `pion/stun`.
 - Treat STUN responses as untrusted: `pion/stun` handles parsing. No further eval.
-- No subprocess execution. No file I/O beyond reading `--config` (deferred to v0.2+).
+- No subprocess execution. No file I/O (no config file in v0.1).
 
-## Risks
-
-1. **Public STUN servers are rate-limited / unreliable.** Mitigation: default to two servers, support `--server` override, treat probe failures as warnings not fatal where possible.
-2. **RFC 5780 classification is incomplete without a cooperating server.** Mitigation: v0.1 is honest about what it cannot determine; v0.2 ships the companion server.
-3. **CGNAT is common and complicates NAT classification.** Mitigation: detect `100.64/10` and call it out separately; forecast stays `unknown` until calibrated against real CGNAT traffic.
-4. **"cone" and "symmetric" are fuzzy legacy terms.** Mitigation: report both RFC 5780 terms and legacy terms, with a one-line explanation in `--verbose`.
