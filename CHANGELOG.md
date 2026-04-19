@@ -28,3 +28,6 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
+
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.0
