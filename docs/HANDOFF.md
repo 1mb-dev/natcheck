@@ -1,8 +1,25 @@
 # natcheck - Handoff
 
-> Last updated: 2026-04-19
-> Session: Scaffold + design docs
+> Last updated: 2026-04-19 (planning complete)
+> Session: Scaffold + design docs + v0.1 plan
 > Companion: [PRD.md](PRD.md), [TRD.md](TRD.md)
+
+## Planning status (2026-04-19)
+
+v0.1 plan is locked. Huddle review complete (Maya / Jordan / Kai), Linus signed off conditionally.
+
+**Working tracker** (local, gitignored): `todos/releases/v0.1.0/00-master-tracker.md`. Phase docs in same dir. Huddle notes: `todos/releases/v0.1.0/huddle-2026-04-19.md`.
+
+**Linus sign-off conditions** (folded into phase docs, summarised here so they persist in committed history):
+
+1. CGNAT forecast defaults to `unknown` until Phase 6 real-network calibration upgrades it to `possible` or `unlikely`.
+2. `internal/classify` tests cover partial-failure matrix (0/2, 1/2 both orderings, 2/2 probe outcomes).
+3. JSON schema pinned via golden-file tests (EIM cone, ADM strict, Blocked all-fail).
+4. Human output leads with `Direct P2P: <verdict>` — NAT type and probe table below.
+5. Phase 6 includes at least one real CGNAT network test with outcome documented in `docs/samples/cgnat.txt`.
+6. README gains a differentiation block + CI usage section **before** `gh repo create`.
+
+**Other locked decisions**: two default STUN servers (no third); IPv6 deferred to v0.3; install path `github.com/1mb-dev/natcheck/cmd/natcheck@latest`; external actions (`gh repo create`, `git push`, launch-post draft, launch-post publish) each require a separate approval.
 
 ## What exists now
 
@@ -45,19 +62,21 @@ Git: **initialized locally, no remote**. No `gh repo create`, no push. First com
 2. Skim `docs/TRD.md` - architecture still sound?
 3. If either shifted, update before coding.
 
-### Step 1: `/pb-plan` phased implementation
+### Step 1: `/pb-plan` phased implementation (DONE 2026-04-19)
 
-Run `/pb-plan` with TRD as input. Expected phases:
+Plan locked in `todos/releases/v0.1.0/`. Phase summary (deltas from original draft noted):
 
 - **Phase 1** (1-2 hours): `internal/probe` - wire `pion/stun`, implement `Prober`, table-test against local `pion/stun` test server.
-- **Phase 2** (1-2 hours): `internal/classify` - pure classification logic, exhaustive table-driven tests.
-- **Phase 3** (1 hour): `internal/report` - human + JSON rendering, golden files.
+- **Phase 2** (1-2 hours): `internal/classify` - pure classification logic, exhaustive table-driven tests + partial-failure matrix. CGNAT forecast defaults to `unknown`.
+- **Phase 3** (1 hour): `internal/report` - human rendering (forecast-first ordering) + JSON with golden-file schema tests.
 - **Phase 4** (1-2 hours): `internal/cli` - flag parsing, orchestration, exit codes.
 - **Phase 5** (30 min): `cmd/natcheck/main.go` - wire `cli.Run`.
-- **Phase 6** (30 min): manual verification against real networks.
-- **Phase 7**: launch post draft (content stream), `gh repo create`, push.
+- **Phase 6** (30 min + network): manual verification with explicit pass criteria; at least one CGNAT network test; calibrate or retain `unknown`.
+- **Phase 7**: README polish (differentiation + CI usage), `gh repo create`, push, launch post (NAT explainer, tool as CTA — not a dissertation). Each external action separately gated.
 
 Total: one weekend for v0.1 per PRD.
+
+Start Phase 1 by reading `todos/releases/v0.1.0/phase-1-probe.md`.
 
 ### Step 2: external action gate reminders
 
