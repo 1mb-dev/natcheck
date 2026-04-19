@@ -2,7 +2,9 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); releases follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased] — v0.1.0
+## [Unreleased]
+
+## [0.1.0] — 2026-04-19
 
 Initial release. See [`docs/design.md`](docs/design.md) for scope and architecture.
 
