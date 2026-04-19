@@ -32,7 +32,7 @@ NATCHECK_UPDATE_GOLDEN=1 go test ./internal/report/...
 `natcheck` ships with real-network captures under [`docs/samples/`](docs/samples/). Samples from unusual networks — CGNAT carriers, captive portals, degraded links — are especially welcome.
 
 1. Run `natcheck` and `natcheck --json` on the target network.
-2. Redact public IP addresses to RFC 5737 (IPv4 `203.0.113.0/24`) and RFC 3849 (IPv6 `2001:db8::/32`) documentation ranges. Ports, RTTs, error messages, and RFC 1918 private source addresses can stay as observed.
+2. Redact any address that could identify a specific machine: public IPs to RFC 5737 (IPv4 `203.0.113.0/24`) and RFC 3849 (IPv6 `2001:db8::/32`) documentation ranges; private RFC 1918 source addresses to generic placeholders (e.g., `192.168.1.2`). Ports, RTTs, error message shapes, and external STUN server IPs can stay as observed.
 3. Commit the `.txt` and `.json` files under `docs/samples/`.
 4. Add a row to the table in [`docs/samples/README.md`](docs/samples/README.md).
 

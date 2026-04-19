@@ -10,7 +10,7 @@
     },
     {
       "server": "162.159.207.0:3478",
-      "error": "read response: read udp 192.168.1.69:50201->162.159.207.0:3478: i/o timeout"
+      "error": "read response: read udp 192.168.1.2:50201->162.159.207.0:3478: i/o timeout"
     }
   ],
   "webrtc_forecast": {

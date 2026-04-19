@@ -1,6 +1,6 @@
 # Sample outputs
 
-Real `natcheck` runs captured across networks. Public IP addresses are redacted to RFC 5737 (IPv4 `203.0.113.0/24`) and RFC 3849 (IPv6 `2001:db8::/32`) documentation ranges; ports, RTTs, error messages, and private RFC 1918 source addresses are real.
+Real `natcheck` runs captured across networks. Any address that could identify a specific machine is redacted: public IPs to RFC 5737 (IPv4 `203.0.113.0/24`) and RFC 3849 (IPv6 `2001:db8::/32`) documentation ranges; private RFC 1918 source addresses to generic placeholders (e.g., `192.168.1.2`). Ports, RTTs, error message shapes, and external STUN server IPs are real.
 
 ## Captured
 
