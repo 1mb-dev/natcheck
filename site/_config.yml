@@ -1,0 +1,17 @@
+title: natcheck
+description: NAT type diagnosis CLI. One command tells you why your WebRTC, P2P, or VPN connections struggle.
+url: https://1mb-dev.github.io
+baseurl: /natcheck
+
+theme: minima
+
+repository: 1mb-dev/natcheck
+github_username: 1mb-dev
+
+plugins:
+  - jekyll-seo-tag
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor/
