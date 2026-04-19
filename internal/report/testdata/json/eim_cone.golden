@@ -1,0 +1,24 @@
+{
+  "nat_type": "EIM",
+  "nat_type_legacy": "cone",
+  "public_endpoint": "203.0.113.45:51820",
+  "probes": [
+    {
+      "server": "stun.l.google.com:19302",
+      "rtt_ms": 24,
+      "mapped": "203.0.113.45:51820"
+    },
+    {
+      "server": "stun.cloudflare.com:3478",
+      "rtt_ms": 31,
+      "mapped": "203.0.113.45:51820"
+    }
+  ],
+  "webrtc_forecast": {
+    "direct_p2p": "likely",
+    "turn_required": false
+  },
+  "warnings": [
+    "filtering_behavior_not_tested"
+  ]
+}

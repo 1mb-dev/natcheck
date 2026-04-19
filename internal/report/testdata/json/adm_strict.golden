@@ -1,0 +1,25 @@
+{
+  "nat_type": "ADM",
+  "nat_type_legacy": "symmetric",
+  "public_endpoint": "203.0.113.45:51820",
+  "probes": [
+    {
+      "server": "stun.l.google.com:19302",
+      "rtt_ms": 24,
+      "mapped": "203.0.113.45:51820"
+    },
+    {
+      "server": "stun.cloudflare.com:3478",
+      "rtt_ms": 31,
+      "mapped": "203.0.113.45:51822"
+    }
+  ],
+  "webrtc_forecast": {
+    "direct_p2p": "unlikely",
+    "turn_required": true
+  },
+  "warnings": [
+    "filtering_behavior_not_tested",
+    "adm_or_stricter"
+  ]
+}
