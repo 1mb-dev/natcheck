@@ -126,7 +126,7 @@ internal/report/              Verdict → human text or JSON
 ## Dependencies
 
 - **Runtime:** `github.com/pion/stun/v3` (latest stable). Nothing else for v0.1.
-- **Dev:** `golangci-lint` (shared 1mb-dev CI baseline, v2.9.0+).
+- **Dev:** `golangci-lint` v2.9.0+.
 - **Go version:** 1.25+.
 
 Rejected for v0.1:
@@ -268,7 +268,7 @@ No live-network test in CI. Manual verification against real networks before rel
 
 - `make build` → single binary in repo root, versioned via `-ldflags "-X main.version=..."`
 - `make test` → unit + integration with in-process test server, no network
-- `make lint` → `golangci-lint` (v2.9.0 per 1mb-dev shared CI)
+- `make lint` → `golangci-lint` v2.9.0
 - Release: `git tag v0.1.0`, push.
 
 ## Non-functional targets

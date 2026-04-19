@@ -2,9 +2,7 @@
 
 ## Reporting vulnerabilities
 
-Please report suspected security issues privately via [GitHub Security Advisories](https://github.com/1mb-dev/natcheck/security/advisories/new). If that's unavailable, contact [viks@vnykmshr.com](mailto:viks@vnykmshr.com).
-
-Expected acknowledgement: within 72 hours.
+Please report suspected security issues privately via [GitHub Security Advisories](https://github.com/1mb-dev/natcheck/security/advisories/new).
 
 ## What natcheck does (and doesn't do) with your data
 
