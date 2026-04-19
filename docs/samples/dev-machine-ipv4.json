@@ -1,0 +1,24 @@
+{
+  "nat_type": "Unknown",
+  "nat_type_legacy": "",
+  "public_endpoint": "203.0.113.45:20377",
+  "probes": [
+    {
+      "server": "74.125.250.129:19302",
+      "rtt_ms": 69,
+      "mapped": "203.0.113.45:20377"
+    },
+    {
+      "server": "162.159.207.0:3478",
+      "error": "read response: read udp 192.168.1.69:50201->162.159.207.0:3478: i/o timeout"
+    }
+  ],
+  "webrtc_forecast": {
+    "direct_p2p": "unknown",
+    "turn_required": false
+  },
+  "warnings": [
+    "filtering_behavior_not_tested",
+    "insufficient_probes"
+  ]
+}

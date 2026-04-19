@@ -1,0 +1,12 @@
+$ natcheck --server 74.125.250.129:19302 --server 162.159.207.0:3478
+
+Direct P2P: unknown
+NAT type: Unknown
+Public endpoint: 203.0.113.45:13997
+
+Probes:
+  74.125.250.129:19302  rtt=33ms  mapped=203.0.113.45:13997
+  162.159.207.0:3478    error=read response: read udp 192.168.1.69:58520->162.159.207.0:3478: i/o timeout
+
+Filtering not tested (v0.1).
+Insufficient probes to determine mapping behavior.
