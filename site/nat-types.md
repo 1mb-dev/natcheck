@@ -1,82 +1,70 @@
 ---
 layout: page
 title: "NAT types and why WebRTC connections fail"
-description: "A reference for WebRTC, P2P, and VPN developers: the four NAT mapping behaviours, why symmetric NAT breaks direct P2P, how CGNAT differs, and when TURN is required."
+description: "Why some WebRTC and P2P sessions can't connect directly. The three RFC 5780 mapping behaviours, CGNAT, and when you need TURN."
 permalink: /nat-types/
 ---
 
-You shipped a WebRTC or P2P app. It works on your network and on most users' networks. But for some fraction of users, the direct peer-to-peer connection never completes, and either your app falls back to a relay server or the session just fails. This page is a reference for why that happens and how to tell which case you are in.
+Some fraction of your users can't establish a direct WebRTC or P2P session. They fall back to a relay, or the session fails.
 
-It is written for developers debugging their own applications, not for network operators. It uses the RFC 5780 terminology and the older "cone / symmetric" labels side by side, because both still appear in documentation.
+## Mapping: what your NAT shows to the world
 
-## What a NAT actually does
+Your NAT sits between your laptop and the internet — usually a home router, sometimes an ISP middlebox. When your laptop at `192.168.1.42:51820` sends a packet to a public server, the NAT rewrites the source to one of its public addresses (say `203.0.113.45:51820`) and remembers the mapping for replies.
 
-A NAT (Network Address Translator) is the device between your laptop and the public internet — usually a home router or a carrier-grade middlebox. When your laptop at `192.168.1.42:51820` sends a packet to a public server, the NAT rewrites the source address to one of its own public addresses, say `203.0.113.45:51820`, and remembers the mapping so it can rewrite replies back to your laptop.
+When the same laptop sends to two different servers from the same local port, the NAT can use the same public port for both or a different port for each. That choice — the **mapping behaviour** — decides whether direct P2P works.
 
-Direct peer-to-peer works by two NATed clients discovering each other's *public* address and port via a STUN server, then each side sending packets to the other's public endpoint. Whether those packets reach the other side depends entirely on two behaviours the NAT is free to choose for itself: **mapping** and **filtering**.
-
-## Mapping: what address does the NAT show to the world
-
-When your laptop sends packets from `192.168.1.42:51820` to two different servers, the NAT might use the *same* public port for both — or a different public port for each. This is the **mapping behaviour** and it has four variants in RFC 5780:
-
-| RFC 5780 term | Legacy name | Meaning |
+| RFC 5780 | Legacy | Behaviour |
 |---|---|---|
-| **Endpoint-Independent Mapping** (EIM) | Full Cone | Same public `IP:port` regardless of destination. |
-| **Address-Dependent Mapping** (ADM) | Restricted Cone | Same public port per destination IP; new port per new IP. |
-| **Address-and-Port-Dependent Mapping** (APDM) | Symmetric NAT | New public port per destination `IP:port` — effectively unpredictable from the outside. |
-| No NAT | — | Laptop has a public IP directly. |
+| **Endpoint-Independent Mapping** (EIM) | Full Cone | Same public `IP:port` for any destination. |
+| **Address-Dependent Mapping** (ADM) | Restricted Cone | Same port per destination IP; new port per new IP. |
+| **Address-and-Port-Dependent Mapping** (APDM) | Symmetric | New public port per destination `IP:port`. |
 
-The first three are all "NATed". The difference matters because peer-to-peer hole-punching requires the remote peer to predict your public port, and **APDM (symmetric NAT) makes that prediction impossible** — your NAT shows a different port to every remote peer, so the port discovered via STUN will not match the port used for the actual peer connection.
+Hole-punching needs the remote peer to predict your public port. APDM defeats that: the port a STUN server reports is not the port your NAT uses when you later contact your peer. ICE cannot hole-punch through APDM — it falls back to relaying via TURN.
 
-## Filtering: who is allowed to reach you
+## Filtering: who can reach an existing mapping
 
-Once a mapping exists, the NAT decides which inbound packets it forwards to your laptop. Three variants:
+Once a mapping exists, the NAT chooses which inbound packets to forward.
 
-| RFC 5780 term | Meaning |
+| RFC 5780 | Filtering |
 |---|---|
-| **Endpoint-Independent Filtering** | Any external host can send packets to the mapping. |
-| **Address-Dependent Filtering** | Only hosts with an IP you've sent to can reach you. |
-| **Address-and-Port-Dependent Filtering** | Only the exact `IP:port` tuples you've sent to can reach you. |
+| **Endpoint-Independent** | Any external host can send to the mapping. |
+| **Address-Dependent** | Only hosts you've already sent to can reach you. |
+| **Address-and-Port-Dependent** | Only exact `IP:port` tuples you've sent to can reach you. |
 
-Filtering controls whether the *first packet* from your peer will be accepted — and it interacts with mapping to determine whether a "simultaneous send" hole-punch works.
+Filtering controls whether the first inbound packet from your peer is accepted, and interacts with mapping to decide whether a simultaneous-send hole-punch works.
 
-## The "will WebRTC work" matrix
+## Will direct P2P work?
 
-For direct peer-to-peer to succeed, both sides need a combination that allows hole-punching. The dominant factor is mapping:
+Mapping on both sides is the dominant factor:
 
-- **EIM × EIM:** direct P2P works reliably. Best case.
-- **EIM × ADM or APDM:** usually works. The side with the stricter NAT receives first; the permissive side's predictable port lets the simultaneous-send trick punch through.
-- **ADM × ADM:** often works with good ICE implementations.
-- **APDM × anything:** **direct P2P fails**. The port presented via STUN does not match the port used when actually connecting to the peer, so hole-punching cannot succeed. You need a **TURN** relay.
+- **EIM × EIM:** works reliably.
+- **EIM × ADM:** usually works. The EIM side has a predictable endpoint; the ADM side initiates and the EIM learns its source.
+- **EIM × APDM:** marginal. Works when the APDM side initiates and the EIM responds to the observed source port; ICE candidate gathering alone is not enough.
+- **ADM × ADM:** often works with a reasonable ICE implementation.
+- **APDM × ADM or APDM × APDM:** fails. TURN relay required.
 
-This is why "behind symmetric NAT" is a death sentence for direct WebRTC: the mapping behaviour is unpredictable, so no amount of clever ICE candidate gathering fixes it.
+## CGNAT is a second NAT in front of yours
 
-## CGNAT is a separate problem
+Carrier-Grade NAT is a NAT your ISP runs in front of your own NAT. Common on mobile carriers (T-Mobile US, Jio India) and Starlink. Detectable because your public IP falls in `100.64.0.0/10`, the RFC 6598 shared address space.
 
-Carrier-Grade NAT (CGNAT) is a second layer of NAT run by the ISP itself, typically on mobile carriers and some residential broadband (T-Mobile US, Jio India, Starlink, and others). Your router NATs you once; the carrier NATs you again.
+CGNAT behaviour varies by carrier. Some run permissive EIM CGNATs that hole-punch fine; others run APDM and don't. Without an active probe on the specific carrier, `unknown` is the correct answer.
 
-Detectable signal: your public IP falls in the `100.64.0.0/10` range reserved by RFC 6598 for shared CGNAT space. If you see a `100.64.x.x` address, you are behind CGNAT.
+## STUN, TURN, or neither
 
-Whether direct P2P works on CGNAT depends on the carrier's specific implementation, and the honest answer for most real networks is "it varies". Some carriers run permissive EIM/EIF CGNATs that hole-punch fine. Others run APDM CGNATs that don't. Without an active probe on the carrier in question, the only responsible answer is **unknown** — anything else is guessing.
+- **STUN alone** works when both peers are behind EIM or ADM with reasonable filtering. Google and Cloudflare run public STUN servers for free.
+- **TURN** is required when at least one peer is APDM or on a hostile CGNAT. TURN relays the full session, so it costs bandwidth. Don't use public TURN in production — run your own ([coturn](https://github.com/coturn/coturn) is the standard).
+- **Neither** when at least one peer has a routable public IP (datacenter, open IPv6). Increasingly common; not yet default for residential users.
 
-## So: STUN, TURN, or neither?
+"What fraction of my users need TURN" is a question about your user base, not your code.
 
-- **STUN alone** is enough when both peers are behind EIM/ADM NATs with reasonable filtering. STUN servers are cheap — Google and Cloudflare run public ones for free.
-- **TURN is required** when at least one peer is behind APDM (symmetric NAT) or a restrictive CGNAT. TURN relays the whole conversation through a server, so it costs bandwidth and money to operate. You cannot use public TURN servers in production; you run your own ([coturn](https://github.com/coturn/coturn) is the standard).
-- **Neither** applies when a peer has a routable public IP (datacenter, IPv6 with no firewall, etc.) — increasingly common but not yet the default for residential users.
-
-The "will my users need TURN" question is really "what fraction of my users are behind APDM or hostile CGNAT" — a number that depends on your user base, not your code.
-
-## Diagnosing the network you're on
-
-To know which bucket a specific network falls into, you probe it with STUN from that network and compare responses across multiple servers. The short version:
+## Diagnosing a specific network
 
 1. Send STUN Binding requests to two or more STUN servers on different IPs from the same local port.
-2. If all servers report the **same** mapped public `IP:port`: EIM. Hole-punching friendly.
-3. If servers report **different** mapped ports: ADM or APDM. The distinction requires RFC 5780's `CHANGE-REQUEST` attribute, which most public STUN servers do not support.
-4. If your public IP is in `100.64.0.0/10`: you are behind CGNAT and the above probe is only telling you about the carrier's NAT, not your own.
+2. Same mapped public `IP:port` across servers → EIM. Hole-punching friendly.
+3. Different mapped ports → ADM or APDM. Distinguishing them requires RFC 5780's `CHANGE-REQUEST` attribute, which most public STUN servers don't support.
+4. Public IP in `100.64.0.0/10` → CGNAT. The probe characterises the carrier's NAT, not yours.
 
-The tool that motivates this page, [natcheck](https://github.com/1mb-dev/natcheck), runs exactly this probe from your network and reports a WebRTC direct-P2P forecast. If you already know RFC 5780 cold, you do not need it — any STUN client plus some arithmetic gets you there. If you want a one-command answer and CI-friendly exit codes:
+[natcheck](https://github.com/1mb-dev/natcheck) runs this probe and reports a direct-P2P forecast with exit codes a CI job can act on. Any STUN client plus the steps above works if you prefer to do it by hand.
 
 ```bash
 brew tap 1mb-dev/tap
@@ -84,14 +72,12 @@ brew install natcheck
 natcheck
 ```
 
-or
+or, with a Go toolchain:
 
 ```bash
 go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
 natcheck
 ```
-
-Sample output:
 
 ```
 Direct P2P: likely
@@ -105,19 +91,17 @@ Probes:
 Filtering not tested (v0.1).
 ```
 
-natcheck reports `unknown` on CGNAT instead of guessing, because guessing is how wrong production assumptions get made.
+On CGNAT, natcheck reports `unknown` rather than guessing.
 
-## What this page is not
+## Not covered
 
-It is a developer-oriented reference, not a complete treatment of NAT traversal. The parts deliberately skipped:
+- **Hairpinning** — NAT forwarding packets back to another host behind itself.
+- **UPnP / NAT-PMP / PCP** — the app requests a mapping instead of inferring one via STUN.
+- **ICE** — the algorithm WebRTC runs to try multiple candidate paths.
+- **QUIC / WebTransport** — newer transports with different NAT traversal characteristics.
 
-- **Hairpinning** (NAT forwarding packets back to another host behind the same NAT). Relevant if two clients on the same LAN connect to each other by public address.
-- **UPnP / NAT-PMP / PCP** port mapping protocols. These let an application *request* a mapping rather than rely on STUN discovery.
-- **ICE** — the algorithm WebRTC uses to try multiple candidate paths (host, server-reflexive via STUN, relayed via TURN) and pick the first that works.
-- **QUIC and WebTransport** — newer transports with their own NAT traversal characteristics.
-
-Further reading:
+## References
 
 - [RFC 5780 — NAT Behavior Discovery Using STUN](https://www.rfc-editor.org/rfc/rfc5780)
 - [RFC 6598 — CGNAT / 100.64.0.0/10](https://www.rfc-editor.org/rfc/rfc6598)
-- [pion/stun](https://github.com/pion/stun) — the Go STUN implementation underneath natcheck
+- [pion/stun](https://github.com/pion/stun)

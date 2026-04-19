@@ -44,7 +44,7 @@ go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
 
 ## Background
 
-- [NAT types and why WebRTC connections fail]({{ '/nat-types/' | relative_url }}) — reference on RFC 5780 mapping behaviour, CGNAT, and when TURN is required.
+- [NAT types and why WebRTC connections fail]({{ '/nat-types/' | relative_url }}) — RFC 5780 mapping, CGNAT, and when to use TURN.
 
 ## Links
 
