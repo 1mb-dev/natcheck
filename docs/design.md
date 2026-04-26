@@ -47,7 +47,7 @@ In:
 - `--server host:port` flag, repeatable, to add or override servers
 - `--timeout duration` flag (default 5s)
 - `--version`, `--help`
-- WebRTC forecast: `likely | possible | unlikely | unknown`
+- WebRTC forecast: `likely | possible | unlikely | unknown` (v0.1 emits `likely`, `unlikely`, `unknown`; `possible` is reserved for v0.2 filtering and CGNAT calibration)
 - CGNAT heuristic warning (if mapped IP is in 100.64.0.0/10)
 - Exit codes: 0 (P2P-friendly), 1 (P2P-hostile), 2 (probe error)
 
@@ -210,7 +210,7 @@ type Verdict struct {
 }
 
 type Forecast struct {
-    DirectP2P    string // "likely" | "possible" | "unlikely" | "unknown"
+    DirectP2P    string // "likely" | "possible" | "unlikely" | "unknown" (v0.1 emits {likely, unlikely, unknown}; "possible" reserved for v0.2)
     TURNRequired bool
 }
 

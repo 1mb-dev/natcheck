@@ -59,7 +59,7 @@ func (t NATType) String() string {
 
 // Forecast is the WebRTC direct-P2P prediction.
 type Forecast struct {
-	DirectP2P    string // "likely" | "possible" | "unlikely" | "unknown"
+	DirectP2P    string // "likely" | "possible" | "unlikely" | "unknown" (v0.1 emits {likely, unlikely, unknown}; "possible" reserved for v0.2 filtering + CGNAT calibration)
 	TURNRequired bool
 }
 
