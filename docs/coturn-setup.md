@@ -19,11 +19,10 @@ The right setup varies by provider:
 ### Worked example: DigitalOcean basic droplet
 
 1. Create a Reserved IP in the same region as your droplet, assign it to the droplet.
-2. SSH to the droplet, alias the Reserved IP to eth0:
+2. SSH to the droplet, alias the Reserved IP to eth0 (substitute your own — the script in the automated path below does this for you):
    ```sh
-   ip addr add 168.144.1.58/32 dev eth0
+   ip addr add <your-reserved-ip>/32 dev eth0
    ```
-   (Substitute your Reserved IP. The script in the automated path below does this for you.)
 3. In the conf, `YOUR_FIRST_IP` is the droplet's primary public IP; `YOUR_SECOND_IP` is the Reserved IP.
 
 ## What you need
