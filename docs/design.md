@@ -1,6 +1,6 @@
 # natcheck — Architecture
 
-> Status: v0.1.2 shipped (RFC 5780 §4.4 filtering classification). v0.2 design contract is the addendum at end of document.
+> Status: v0.1.3 shipped (RFC 5780 §4.4 filtering classification + cross-family mapping fix). v0.2 design contract is the addendum at end of document.
 > Last updated: 2026-04-26
 
 Product framing and technical spec. v0.1 spec lives in this document as shipped; v0.2 design is the addendum at the end. Working notes and per-phase plans live in `todos/` (dev-internal, not tracked in git).
@@ -331,8 +331,10 @@ v0.2 is a milestone reached via four bisectable patches, not a single release. E
 | Patch | Status | Adds |
 |---|---|---|
 | **v0.1.2** | shipped (PRs #7–#11, tag `v0.1.2`) | RFC 5780 §4.4 filtering classification (capability-driven via `--server` advertising `OTHER-ADDRESS`); JSON `filtering` object; classifier upgrade emitting reserved `possible`; coturn reference config asset + setup doc; `internal/stunserver` foundation package |
-| **v0.1.3** | planned | Hairpinning detection via two local sockets, parallel with mapping probes; JSON `hairpinning` field |
-| **v0.1.4** | planned | `natcheck server` subcommand: stateless RFC 5780 §3 STUN responder. Promoted from in-process responder via shared `internal/stunserver/` package |
+| **v0.1.2.x** | shipped (tags `v0.1.2.1`, `v0.1.2.2`) | coturn config + setup doc fixes so v0.1.2's filtering classification works on more provider topologies; `scripts/validate-coturn.sh` provisioner. No code or schema delta. (4-segment tags incompatible with Go module versioning — see those releases' notes; lesson recorded.) |
+| **v0.1.3** | shipped (tag `v0.1.3`) | Cross-address-family mapping classification fix (#14): per-family grouping + combine. New `mixed_address_family_probes` warning. Hairpinning shifts to v0.1.4. |
+| **v0.1.4** | planned | Hairpinning detection via two local sockets, parallel with mapping probes; JSON `hairpinning` field |
+| **v0.1.5** | planned | `natcheck server` subcommand: stateless RFC 5780 §3 STUN responder. Promoted from in-process responder via shared `internal/stunserver/` package |
 | **v0.2.0** | planned | Version bump; README + site copy reconciliation; CHANGELOG with v0.1 → v0.2 JSON migration section |
 
 v0.2.0 is the line where downstream consumers can rely on the new schema fields.
