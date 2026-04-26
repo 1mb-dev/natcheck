@@ -165,10 +165,10 @@ func compareGolden(t *testing.T, path string, got []byte) {
 	}
 }
 
-func renderToBytes(t *testing.T, v classify.Verdict, probes []probe.Result, filtering *probe.FilteringResult, f Format) []byte {
+func renderToBytes(t *testing.T, v classify.Verdict, probes []probe.Result, _ *probe.FilteringResult, f Format) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := Render(&buf, v, probes, filtering, f); err != nil {
+	if err := Render(&buf, v, probes, f); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	return buf.Bytes()
@@ -200,9 +200,9 @@ func TestRender_Golden(t *testing.T) {
 }
 
 func TestRender_UnknownFormat(t *testing.T) {
-	v, probes, filtering := fixtureEIMCone()
+	v, probes, _ := fixtureEIMCone()
 	var buf bytes.Buffer
-	if err := Render(&buf, v, probes, filtering, Format(99)); err == nil {
+	if err := Render(&buf, v, probes, Format(99)); err == nil {
 		t.Fatal("expected error on unknown format, got nil")
 	}
 }
@@ -218,7 +218,7 @@ func TestRender_WarningsAlwaysArray(t *testing.T) {
 		// Warnings intentionally nil.
 	}
 	var buf bytes.Buffer
-	if err := Render(&buf, v, nil, nil, FormatJSON); err != nil {
+	if err := Render(&buf, v, nil, FormatJSON); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	if !bytes.Contains(buf.Bytes(), []byte(`"warnings": []`)) {

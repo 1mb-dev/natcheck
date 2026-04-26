@@ -94,7 +94,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober p
 	if opts.json {
 		format = report.FormatJSON
 	}
-	if err := report.Render(out, verdict, results, filteringResult, format); err != nil {
+	if err := report.Render(out, verdict, results, format); err != nil {
 		_, _ = fmt.Fprintf(errOut, "render: %v\n", err)
 		return 2
 	}
