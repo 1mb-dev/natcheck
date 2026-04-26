@@ -297,6 +297,67 @@ func TestProbe_OtherAddressExtracted(t *testing.T) {
 	}
 }
 
+// TestProbe_OtherAddressIPv4MappedUnmapped verifies the OTHER-ADDRESS
+// Unmap() path: when a server emits the attribute as v6-family carrying
+// an IPv4-mapped IPv6 address (::ffff:1.2.3.4), Result.Other surfaces
+// the unmapped 4-byte form. stunserver.Handle Unmaps before encoding,
+// so we hand-craft the response here to exercise the probe-side Unmap().
+func TestProbe_OtherAddressIPv4MappedUnmapped(t *testing.T) {
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+
+	// Echo first request with a hand-crafted OTHER-ADDRESS in v6 family,
+	// payload = ::ffff:198.51.100.1 (IPv4-mapped form). The probe must
+	// Unmap() it back to 198.51.100.1.
+	v4MappedV6 := net.ParseIP("::ffff:198.51.100.1") // 16-byte slice
+	if v4MappedV6 == nil || len(v4MappedV6) != 16 {
+		t.Fatalf("test setup: expected 16-byte IPv4-mapped IPv6, got %v len=%d", v4MappedV6, len(v4MappedV6))
+	}
+
+	go func() {
+		buf := make([]byte, 1500)
+		n, from, err := conn.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		req := &stun.Message{Raw: append([]byte{}, buf[:n]...)}
+		if err := req.Decode(); err != nil {
+			return
+		}
+		udp := from.(*net.UDPAddr)
+		resp, err := stun.Build(
+			stun.NewTransactionIDSetter(req.TransactionID),
+			stun.BindingSuccess,
+			&stun.XORMappedAddress{IP: udp.IP, Port: udp.Port},
+			&stun.OtherAddress{IP: v4MappedV6, Port: 3479},
+		)
+		if err != nil {
+			return
+		}
+		_, _ = conn.WriteTo(resp.Raw, from)
+	}()
+
+	probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res := NewSTUN().Probe(probeCtx, Server{Host: "127.0.0.1", Port: port})
+	if res.Err != nil {
+		t.Fatalf("probe: %v", res.Err)
+	}
+	if !res.Other.IsValid() {
+		t.Fatalf("Other not set, want 198.51.100.1:3479")
+	}
+	if !res.Other.Addr().Is4() {
+		t.Errorf("Other.Addr() = %v (Is4=%v), want unmapped IPv4", res.Other.Addr(), res.Other.Addr().Is4())
+	}
+	if res.Other.String() != "198.51.100.1:3479" {
+		t.Errorf("Other = %q, want %q", res.Other.String(), "198.51.100.1:3479")
+	}
+}
+
 func TestProbe_OtherAddressAbsent(t *testing.T) {
 	// Phase-1 stunserver (no Other configured) → Result.Other stays zero.
 	f := newFakeSTUN(t, 0, behaviorNormal)
