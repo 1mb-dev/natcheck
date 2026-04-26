@@ -105,5 +105,13 @@ func (stunProber) Probe(ctx context.Context, s Server) Result {
 		return res
 	}
 	res.Mapped = mapped
+
+	// OTHER-ADDRESS (RFC 5780 §7.4) is optional: silently skip when absent.
+	var oa stun.OtherAddress
+	if err := oa.GetFrom(resp); err == nil {
+		if otherIP, ok := netip.AddrFromSlice(oa.IP); ok {
+			res.Other = netip.AddrPortFrom(otherIP.Unmap(), uint16(oa.Port))
+		}
+	}
 	return res
 }

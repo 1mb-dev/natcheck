@@ -19,5 +19,8 @@
   "warnings": [
     "filtering_behavior_not_tested",
     "all_probes_failed"
-  ]
+  ],
+  "filtering": {
+    "behavior": "untested"
+  }
 }

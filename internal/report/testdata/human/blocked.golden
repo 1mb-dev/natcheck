@@ -5,5 +5,5 @@ Probes:
   stun.l.google.com:19302   error=dial udp stun.l.google.com:19302: i/o timeout
   stun.cloudflare.com:3478  error=dial udp stun.cloudflare.com:3478: i/o timeout
 
-Filtering not tested (v0.1).
+Filtering not tested.
 All probes failed.

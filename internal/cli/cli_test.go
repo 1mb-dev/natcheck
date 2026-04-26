@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -56,10 +57,17 @@ func okProber() *fakeProber {
 	}}
 }
 
+// noFilterer returns a FilteringResult with ErrFilteringNotSupported. Used
+// when a test doesn't care about filtering (capability detection won't fire
+// for default servers anyway since the fakeProber doesn't populate Other).
+func noFilterer(_ context.Context, s probe.Server, _ time.Duration) probe.FilteringResult {
+	return probe.FilteringResult{Server: s, Err: probe.ErrFilteringNotSupported}
+}
+
 func run(t *testing.T, prober probe.Prober, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code := runWith(context.Background(), args, &out, &errOut, prober)
+	code := runWith(context.Background(), args, &out, &errOut, prober, noFilterer)
 	return code, out.String(), errOut.String()
 }
 
@@ -242,6 +250,66 @@ func TestRun_TimeoutFires(t *testing.T) {
 	code, _, _ := run(t, fp, "--timeout", "50ms")
 	if code != 2 {
 		t.Errorf("code = %d, want 2 (all probes cancelled)", code)
+	}
+}
+
+func TestRun_FilteringPicksFirstCapableServer(t *testing.T) {
+	// Three servers; only #2 advertises OTHER-ADDRESS. Capability detection
+	// must invoke the filterer once with server #2 (not #0 or #1).
+	srv0 := probe.Server{Host: "stun.a.example", Port: 3478}
+	srv1 := probe.Server{Host: "stun.b.example", Port: 3478}
+	srv2 := probe.Server{Host: "stun.c.example", Port: 3478}
+	fp := &fakeProber{resultsByServer: map[string]probe.Result{
+		serverKey(srv0): {Mapped: netip.MustParseAddrPort("203.0.113.45:51820"), RTT: 10 * time.Millisecond},
+		serverKey(srv1): {Mapped: netip.MustParseAddrPort("203.0.113.45:51820"), RTT: 12 * time.Millisecond},
+		serverKey(srv2): {
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
+			RTT:    14 * time.Millisecond,
+		},
+	}}
+
+	var calledWith []probe.Server
+	var mu sync.Mutex
+	filterer := func(_ context.Context, s probe.Server, _ time.Duration) probe.FilteringResult {
+		mu.Lock()
+		calledWith = append(calledWith, s)
+		mu.Unlock()
+		return probe.FilteringResult{Server: s, Test2Received: true, Test3Received: true}
+	}
+
+	var out, errOut bytes.Buffer
+	code := runWith(context.Background(), []string{
+		"--server", serverKey(srv0),
+		"--server", serverKey(srv1),
+		"--server", serverKey(srv2),
+	}, &out, &errOut, fp, filterer)
+	if code != 0 {
+		t.Errorf("code = %d, want 0", code)
+	}
+	if len(calledWith) != 1 {
+		t.Fatalf("filterer called %d times, want 1", len(calledWith))
+	}
+	if calledWith[0] != srv2 {
+		t.Errorf("filterer called with %v, want %v", calledWith[0], srv2)
+	}
+}
+
+func TestRun_FilteringSkippedWhenNoCapableServer(t *testing.T) {
+	// Default fakeProber has no Other. Filterer must NOT be called.
+	fp := okProber()
+	var called int32
+	filterer := func(_ context.Context, _ probe.Server, _ time.Duration) probe.FilteringResult {
+		atomic.AddInt32(&called, 1)
+		return probe.FilteringResult{}
+	}
+	var out, errOut bytes.Buffer
+	code := runWith(context.Background(), nil, &out, &errOut, fp, filterer)
+	if code != 0 {
+		t.Errorf("code = %d, want 0", code)
+	}
+	if n := atomic.LoadInt32(&called); n != 0 {
+		t.Errorf("filterer called %d times, want 0 (no server advertised OTHER-ADDRESS)", n)
 	}
 }
 

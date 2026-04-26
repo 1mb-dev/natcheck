@@ -272,6 +272,46 @@ func TestProbe_MissingMappedAddress(t *testing.T) {
 	}
 }
 
+func TestProbe_OtherAddressExtracted(t *testing.T) {
+	// Stand up a server that advertises OTHER-ADDRESS via stunserver.Options.Other.
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	otherAddr := netip.MustParseAddrPort("198.51.100.1:3479")
+	srv := stunserver.New(stunserver.Options{Other: otherAddr})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = srv.Serve(ctx, conn) }()
+
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), time.Second)
+	defer probeCancel()
+	res := NewSTUN().Probe(probeCtx, Server{Host: "127.0.0.1", Port: port})
+	if res.Err != nil {
+		t.Fatalf("probe: %v", res.Err)
+	}
+	if res.Other != otherAddr {
+		t.Errorf("Other = %v, want %v", res.Other, otherAddr)
+	}
+}
+
+func TestProbe_OtherAddressAbsent(t *testing.T) {
+	// Phase-1 stunserver (no Other configured) → Result.Other stays zero.
+	f := newFakeSTUN(t, 0, behaviorNormal)
+	host, port := f.addr()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	if res.Err != nil {
+		t.Fatalf("probe: %v", res.Err)
+	}
+	if res.Other.IsValid() {
+		t.Errorf("Other = %v, want zero (server didn't advertise)", res.Other)
+	}
+}
+
 func TestProbe_GarbledResponse(t *testing.T) {
 	f := newFakeSTUN(t, 0, behaviorGarbled)
 	host, port := f.addr()

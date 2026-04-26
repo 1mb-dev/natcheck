@@ -26,7 +26,9 @@ const (
 )
 
 // Render writes a Verdict + probe results to w in the requested format.
-// Writer and encoding errors are returned verbatim.
+// Filtering data is consumed via v.Filtering and v.FilteringTestedAgainst
+// (already populated by classify.Classify). Writer and encoding errors are
+// returned verbatim.
 func Render(w io.Writer, v classify.Verdict, probes []probe.Result, format Format) error {
 	switch format {
 	case FormatHuman:
