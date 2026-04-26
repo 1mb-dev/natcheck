@@ -160,8 +160,8 @@ func (f *fakeFilteringServer) dispatch(received corner, data []byte, src net.Add
 
 // respond builds the response on `target`'s Server (so OTHER-ADDRESS reflects
 // target's diagonal) and writes from `target`'s conn — unless dropFrom[target].
-// If noiseAfterReq is set, injects one bogus-TXID packet to the client after
-// the Nth real response (used by TestProbeFiltering_StalePacketDoesNotPollute).
+// If noiseAfter is set, injects one packet that fails STUN Decode after the
+// Nth real response (used by TestProbeFiltering_StalePacketDoesNotPollute).
 func (f *fakeFilteringServer) respond(target corner, data []byte, src net.Addr) {
 	if f.dropFrom[target] {
 		return
