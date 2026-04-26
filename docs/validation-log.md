@@ -56,3 +56,29 @@ Capture used IPv4 literals for Google + Cloudflare to work around #14 (cross-add
 - 4.5/4.6 (Ubuntu 24.04 apt): RFC 5780 enabled by default. `rfc5780` directive logged as `Bad configuration format` — cosmetic, harmless.
 - 4.10+ (Homebrew, Docker `coturn/coturn:latest`): RFC 5780 default flipped to OFF; `rfc5780` directive required.
 - "Only one IP" warning wording: 4.6 uses `cannot support STUN CHANGE_REQUEST functionality because only one IP address is provided`; 4.10 uses `STUN CHANGE_REQUEST not supported: only one IP address is provided`. `validate-coturn.sh` matches the stable substring `only one IP`.
+
+---
+
+## v0.1.3 — 2026-04-26
+
+### Setup
+
+Same droplet as v0.1.2.2 (DO basic droplet, coturn 4.6.1, primary public IPv4 + DO Reserved IP aliased to `eth0`). Same client (residential ISP, dual-stack, observed APDM × APDF on the IPv6 path). Local natcheck rebuilt from v0.1.3 tag (`make build`); `--version` reports `v0.1.3`.
+
+### Verified
+
+- #14 fix: re-ran the natural invocation (`--server stun.l.google.com:19302 --server stun.cloudflare.com:3478 --server <coturn-ipv4>:3478`) that pre-fix produced wrong ADM-by-cross-family-comparison. Post-fix: classifier correctly groups v6 (Google + Cloudflare) and v4 (coturn singleton) probes; combine emits `mixed_address_family_probes` + `insufficient_probes` + `adm_or_stricter` warnings; combined verdict ADM (derived from v6 group's internal evidence — Google and Cloudflare via IPv6 saw different mapped ports), forecast unlikely, exit 1. Same end-user verdict as the v0.1.2.2 IPv4-literal workaround capture, but the reasoning is now correct (per-family classification rather than cross-family equality).
+- Schema additivity: `mixed_address_family_probes` warning value is the only schema delta since v0.1.2; no other field types or values changed.
+- Tag versioning: v0.1.3 is 3-segment semver — Go module proxy correctly indexes the tag (verified `go install ...@v0.1.3` resolves to v0.1.3, not a pseudo-version, unlike v0.1.2.1 / v0.1.2.2).
+
+### Reference output
+
+[`docs/samples/filtering.txt`](samples/filtering.txt) / [`.json`](samples/filtering.json) — captured against this droplet with the natural invocation. Public IPs redacted (client v4 → 203.0.113.45, client v6 → 2001:db8::1, droplet → 198.51.100.99); external server IPs (Google, Cloudflare) and ports / RTTs kept as observed.
+
+### Findings filed
+
+- #19 — `report/human.go:warningText` doesn't have a friendly-text case for `mixed_address_family_probes`; falls through to bare-ID display in human output. Open, v0.1.4 polish.
+
+### Sequence shift
+
+`docs/design.md` v0.2 staged-sequence updated: v0.1.3 = #14 fix (this release); hairpinning shifted to v0.1.4; `natcheck server` shifted to v0.1.5; v0.2.0 line unchanged.
