@@ -91,7 +91,7 @@ Probes:
 Filtering not tested (v0.1).
 ```
 
-On CGNAT, natcheck reports `unknown` rather than guessing.
+On CGNAT, natcheck reports `unknown` rather than guessing. Behind a CGNAT carrier (T-Mobile US, Jio, Starlink, others)? Help calibrate the verdict — see [issue #6](https://github.com/1mb-dev/natcheck/issues/6).
 
 ## Not covered
 
