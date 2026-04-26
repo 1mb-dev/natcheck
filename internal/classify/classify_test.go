@@ -431,6 +431,158 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 			if tc.wantWarnAbsent != "" && hasWarning(got.Warnings, tc.wantWarnAbsent) {
 				t.Errorf("Warnings unexpectedly contains %q; got %v", tc.wantWarnAbsent, got.Warnings)
 			}
+			// Filtering matrix uses two same-family probes; the cross-family
+			// warning must never leak in.
+			if hasWarning(got.Warnings, WarnMixedAddressFamilyProbes) {
+				t.Errorf("Warnings unexpectedly contains %q; got %v", WarnMixedAddressFamilyProbes, got.Warnings)
+			}
+		})
+	}
+}
+
+// TestClassify_MixedAddressFamily covers the per-family grouping + combine
+// path added for #14. Each family observes its own NAT, so cross-family
+// equality comparison would always disagree by construction; the classifier
+// groups by Mapped.Addr().Is4(), classifies each group, and combines under
+// the rule "Unknown is absence of information, not disagreement."
+func TestClassify_MixedAddressFamily(t *testing.T) {
+	v4ok := func(host, mapped string) probe.Result {
+		return probe.Result{
+			Server: probe.Server{Host: host, Port: 3478},
+			Mapped: netip.MustParseAddrPort(mapped),
+			RTT:    10 * time.Millisecond,
+		}
+	}
+	v6ok := func(host, mapped string) probe.Result {
+		return probe.Result{
+			Server: probe.Server{Host: host, Port: 3478},
+			Mapped: netip.MustParseAddrPort(mapped),
+			RTT:    10 * time.Millisecond,
+		}
+	}
+
+	cases := []struct {
+		name           string
+		results        []probe.Result
+		wantType       NATType
+		wantLegacy     string
+		wantCGNAT      bool
+		wantP2P        string
+		wantWarnHas    []string
+		wantWarnAbsent []string
+	}{
+		{
+			name: "mixed_v4eim_v6eim_agreed",
+			results: []probe.Result{
+				v4ok("a", "203.0.113.45:51820"),
+				v4ok("b", "203.0.113.45:51820"),
+				v6ok("c", "[2001:db8::1]:51820"),
+				v6ok("d", "[2001:db8::1]:51820"),
+			},
+			wantType:       EndpointIndependentMapping,
+			wantLegacy:     "cone",
+			wantP2P:        "likely",
+			wantWarnHas:    []string{WarnMixedAddressFamilyProbes, WarnFilteringBehaviorNotTested},
+			wantWarnAbsent: []string{WarnADMOrStricter, WarnInsufficientProbes, WarnAllProbesFailed},
+		},
+		{
+			name: "mixed_v4eim_v6adm_disagreement",
+			results: []probe.Result{
+				v4ok("a", "203.0.113.45:51820"),
+				v4ok("b", "203.0.113.45:51820"),
+				v6ok("c", "[2001:db8::1]:51820"),
+				v6ok("d", "[2001:db8::2]:51821"),
+			},
+			wantType:       Unknown,
+			wantP2P:        "unknown",
+			wantWarnHas:    []string{WarnMixedAddressFamilyProbes},
+			wantWarnAbsent: []string{WarnADMOrStricter}, // suppressed: combined verdict isn't ADM
+		},
+		{
+			name: "mixed_v4eim_v6singleton_v4_wins",
+			results: []probe.Result{
+				v4ok("a", "203.0.113.45:51820"),
+				v4ok("b", "203.0.113.45:51820"),
+				v6ok("c", "[2001:db8::1]:51820"),
+			},
+			wantType:    EndpointIndependentMapping,
+			wantLegacy:  "cone",
+			wantP2P:     "likely",
+			wantWarnHas: []string{WarnMixedAddressFamilyProbes, WarnInsufficientProbes},
+		},
+		{
+			name: "mixed_v4cgnat_eim_v6eim_cgnat_precedence",
+			results: []probe.Result{
+				v4ok("a", "100.64.1.5:51820"),
+				v4ok("b", "100.64.1.5:51820"),
+				v6ok("c", "[2001:db8::1]:51820"),
+				v6ok("d", "[2001:db8::1]:51820"),
+			},
+			wantType:    EndpointIndependentMapping,
+			wantLegacy:  "cone",
+			wantCGNAT:   true,
+			wantP2P:     "unknown", // CGNAT precedence overrides EIM
+			wantWarnHas: []string{WarnMixedAddressFamilyProbes, WarnCGNATDetected},
+		},
+		{
+			name: "mixed_singleton_each_combined_unknown",
+			results: []probe.Result{
+				v4ok("a", "203.0.113.45:51820"),
+				v6ok("b", "[2001:db8::1]:51820"),
+			},
+			wantType:    Unknown,
+			wantP2P:     "unknown",
+			wantWarnHas: []string{WarnMixedAddressFamilyProbes, WarnInsufficientProbes},
+		},
+		{
+			name: "single_family_v6_only_no_mixed_warning",
+			results: []probe.Result{
+				v6ok("a", "[2001:db8::1]:51820"),
+				v6ok("b", "[2001:db8::1]:51820"),
+			},
+			wantType:       EndpointIndependentMapping,
+			wantLegacy:     "cone",
+			wantP2P:        "likely",
+			wantWarnAbsent: []string{WarnMixedAddressFamilyProbes, WarnADMOrStricter, WarnInsufficientProbes},
+		},
+		{
+			name: "single_family_v4_unchanged_path",
+			results: []probe.Result{
+				v4ok("a", "203.0.113.45:51820"),
+				v4ok("b", "203.0.113.45:51820"),
+			},
+			wantType:       EndpointIndependentMapping,
+			wantLegacy:     "cone",
+			wantP2P:        "likely",
+			wantWarnAbsent: []string{WarnMixedAddressFamilyProbes, WarnADMOrStricter, WarnInsufficientProbes},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Classify(tc.results, nil)
+			if got.Type != tc.wantType {
+				t.Errorf("Type = %v, want %v", got.Type, tc.wantType)
+			}
+			if got.LegacyName != tc.wantLegacy {
+				t.Errorf("LegacyName = %q, want %q", got.LegacyName, tc.wantLegacy)
+			}
+			if got.CGNAT != tc.wantCGNAT {
+				t.Errorf("CGNAT = %v, want %v", got.CGNAT, tc.wantCGNAT)
+			}
+			if got.Forecast.DirectP2P != tc.wantP2P {
+				t.Errorf("DirectP2P = %q, want %q", got.Forecast.DirectP2P, tc.wantP2P)
+			}
+			for _, want := range tc.wantWarnHas {
+				if !hasWarning(got.Warnings, want) {
+					t.Errorf("Warnings missing %q; got %v", want, got.Warnings)
+				}
+			}
+			for _, absent := range tc.wantWarnAbsent {
+				if hasWarning(got.Warnings, absent) {
+					t.Errorf("Warnings unexpectedly contains %q; got %v", absent, got.Warnings)
+				}
+			}
 		})
 	}
 }
