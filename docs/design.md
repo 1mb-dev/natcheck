@@ -1,6 +1,6 @@
 # natcheck — Architecture
 
-> Status: v0.1.2 shipped (RFC 5780 §4.4 filtering classification). v0.2 design contract is the addendum at end of document; v0.1.3 (hairpinning) and v0.1.4 (`natcheck server`) remain planned.
+> Status: v0.1.2 shipped (RFC 5780 §4.4 filtering classification). v0.2 design contract is the addendum at end of document.
 > Last updated: 2026-04-26
 
 Product framing and technical spec. v0.1 spec lives in this document as shipped; v0.2 design is the addendum at the end. Working notes and per-phase plans live in `todos/` (dev-internal, not tracked in git).

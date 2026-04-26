@@ -28,18 +28,17 @@ func fail(host string, port int) probe.Result {
 
 func TestClassify(t *testing.T) {
 	cases := []struct {
-		name              string
-		results           []probe.Result
-		filtering         *probe.FilteringResult
-		wantType          NATType
-		wantLegacy        string
-		wantCGNAT         bool
-		wantFiltering     FilteringBehavior
-		wantP2P           string
-		wantTURN          bool
-		wantWarnings      []string // subset assertions
-		wantWarnAbsent    []string // warnings that must NOT be present
-		wantNotTestedWarn bool     // when true, assert WarnFilteringBehaviorNotTested is present
+		name           string
+		results        []probe.Result
+		filtering      *probe.FilteringResult
+		wantType       NATType
+		wantLegacy     string
+		wantCGNAT      bool
+		wantFiltering  FilteringBehavior
+		wantP2P        string
+		wantTURN       bool
+		wantWarnings   []string // subset assertions
+		wantWarnAbsent []string // warnings that must NOT be present
 	}{
 		{
 			name:         "empty input — Blocked",

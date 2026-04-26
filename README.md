@@ -86,7 +86,7 @@ The `--json` schema (`nat_type`, `public_endpoint`, `probes[]`, `webrtc_forecast
 
 ## Scope
 
-natcheck classifies NAT mapping behavior (Endpoint-Independent, Address-Dependent, Address-and-Port-Dependent per RFC 5780) and reports a WebRTC direct-P2P forecast. Filtering behavior (RFC 5780 §4.4) is classified when the configured `--server` advertises `OTHER-ADDRESS`; otherwise the verdict is `untested`. Hairpinning detection is planned for v0.1.3. On CGNAT networks (`100.64.0.0/10`), the forecast is `unknown`. IPv6 works when the network supports it but is not exhaustively tested.
+natcheck classifies NAT mapping behavior (Endpoint-Independent, Address-Dependent, Address-and-Port-Dependent per RFC 5780) and reports a WebRTC direct-P2P forecast. Filtering behavior (RFC 5780 §4.4) is classified when the configured `--server` advertises `OTHER-ADDRESS`; otherwise the verdict is `untested`. Hairpinning is out of scope. On CGNAT networks (`100.64.0.0/10`), the forecast is `unknown`. IPv6 works when the network supports it but is not exhaustively tested.
 
 See [`docs/design.md`](docs/design.md) for full architecture and testing details.
 
