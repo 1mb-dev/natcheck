@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.2.1] — 2026-04-26
+
+### Fixed
+
+- `examples/coturn-natcheck.conf` now sets `rfc5780` and uses the `external-ip=public/private` pair form. coturn 4.x defaults RFC 5780 NAT behavior discovery to OFF; without `rfc5780`, coturn silently omits `OTHER-ADDRESS` from Binding responses and natcheck reports `filtering: untested`. A bare `external-ip=PUBLIC` (single value) triggers `STUN CHANGE_REQUEST not supported: only one IP address is provided` even on a single-NIC VM. Both bugs caused users following [`docs/coturn-setup.md`](docs/coturn-setup.md) on a fresh VPS to silently get the v0.1 behavior with no §4.4 classification, despite v0.1.2's headline feature being filtering classification against coturn.
+- `docs/coturn-setup.md` adds a verification step that has the user check coturn's stdout for the two specific warning lines that signal a misconfigured §4.4 path.
+
+No code or schema changes — `go install github.com/1mb-dev/natcheck/cmd/natcheck@v0.1.2` produces the same binary as `@v0.1.2.1`.
+
 ## [0.1.2] — 2026-04-26
 
 ### Added
@@ -64,7 +73,8 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
 
-[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.2.1...HEAD
+[0.1.2.1]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2.1
 [0.1.2]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2
 [0.1.1]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.1
 [0.1.0]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.0
