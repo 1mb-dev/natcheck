@@ -126,6 +126,7 @@ const (
 	WarnInsufficientProbes              = "insufficient_probes"
 	WarnFilteringBehaviorNotTested      = "filtering_behavior_not_tested"
 	WarnFilteringSkippedNoChangeRequest = "filtering_skipped_no_change_request"
+	WarnMixedAddressFamilyProbes        = "mixed_address_family_probes"
 )
 
 // cgnatPrefix is RFC 6598 shared address space.
@@ -152,6 +153,14 @@ func Classify(results []probe.Result, filtering *probe.FilteringResult) Verdict 
 // classifyMapping derives mapping behavior, public endpoint, CGNAT, and the
 // initial warning set. Forecast is computed by decideForecast after filtering
 // data is folded in.
+//
+// Address-family handling: probes are grouped by Mapped.Addr().Is4() and
+// classified per-group, then combined. Each family observes its own NAT
+// (the v4 NAT and v6 router are independent), so cross-family equality
+// comparison would always disagree by construction. The combine rule treats
+// Unknown as absence of information, not disagreement: a confident verdict
+// from one family wins over Unknown from the other; two confident verdicts
+// must match or the combined verdict is Unknown.
 func classifyMapping(results []probe.Result) Verdict {
 	v := Verdict{Warnings: []string{WarnFilteringBehaviorNotTested}}
 
@@ -162,24 +171,126 @@ func classifyMapping(results []probe.Result) Verdict {
 		}
 	}
 
-	switch len(successes) {
-	case 0:
+	if len(successes) == 0 {
 		v.Type = Blocked
 		v.Warnings = append(v.Warnings, WarnAllProbesFailed)
 		return v
+	}
 
+	var v4, v6 []probe.Result
+	for _, r := range successes {
+		if r.Mapped.Addr().Is4() {
+			v4 = append(v4, r)
+		} else {
+			v6 = append(v6, r)
+		}
+	}
+	multiFamily := len(v4) > 0 && len(v6) > 0
+
+	var v4g, v6g *Verdict
+	if len(v4) > 0 {
+		g := classifyGroup(v4)
+		v4g = &g
+	}
+	if len(v6) > 0 {
+		g := classifyGroup(v6)
+		v6g = &g
+	}
+
+	combined := combineGroups(v4g, v6g)
+	v.Type = combined.Type
+	v.LegacyName = combined.LegacyName
+	v.PublicEndpoint = successes[0].Mapped // top-level endpoint = first success, regardless of family
+	v.CGNAT = combined.CGNAT
+
+	// Warning propagation:
+	//   - WarnInsufficientProbes / WarnCGNATDetected propagate independently
+	//     from any group (they describe facts true of that group).
+	//   - WarnADMOrStricter propagates only when the COMBINED verdict is ADM
+	//     (suppressed under disagreement-Unknown — premise no longer holds).
+	//   - WarnMixedAddressFamilyProbes fires whenever both families are present.
+	if multiFamily {
+		v.Warnings = appendUnique(v.Warnings, WarnMixedAddressFamilyProbes)
+	}
+	for _, g := range []*Verdict{v4g, v6g} {
+		if g == nil {
+			continue
+		}
+		for _, w := range g.Warnings {
+			if w == WarnADMOrStricter && v.Type != AddressDependentMapping {
+				continue
+			}
+			v.Warnings = appendUnique(v.Warnings, w)
+		}
+	}
+
+	return v
+}
+
+// combineGroups reconciles per-family verdicts. "Unknown is absence of
+// information, not disagreement" — a confident verdict beats Unknown; two
+// confident verdicts must match or the combined verdict is Unknown.
+//
+// CGNAT is OR'd across groups (the fact applies if true for any family;
+// decideForecast's CGNAT precedence handles the forecast accordingly).
+func combineGroups(v4g, v6g *Verdict) Verdict {
+	switch {
+	case v4g != nil && v6g != nil:
+		// Both families present.
+		out := Verdict{CGNAT: v4g.CGNAT || v6g.CGNAT}
+		switch {
+		case v4g.Type == Unknown && v6g.Type == Unknown:
+			out.Type = Unknown
+		case v4g.Type == Unknown:
+			out.Type = v6g.Type
+			out.LegacyName = v6g.LegacyName
+		case v6g.Type == Unknown:
+			out.Type = v4g.Type
+			out.LegacyName = v4g.LegacyName
+		case v4g.Type == v6g.Type:
+			out.Type = v4g.Type
+			out.LegacyName = v4g.LegacyName
+		default:
+			out.Type = Unknown
+		}
+		return out
+	case v4g != nil:
+		return *v4g
+	case v6g != nil:
+		return *v6g
+	default:
+		// Unreachable: caller ensures at least one group is non-nil.
+		return Verdict{Type: Unknown}
+	}
+}
+
+// appendUnique appends w to ws only if not already present. Preserves order.
+func appendUnique(ws []string, w string) []string {
+	for _, x := range ws {
+		if x == w {
+			return ws
+		}
+	}
+	return append(ws, w)
+}
+
+// classifyGroup runs the case-1/case-many mapping classification for a
+// non-empty set of successful probes. CGNAT detection is applied. Warnings
+// returned do NOT include WarnFilteringBehaviorNotTested — that's the
+// caller's concern at the combined-verdict level.
+func classifyGroup(group []probe.Result) Verdict {
+	v := Verdict{}
+	switch len(group) {
 	case 1:
 		v.Type = Unknown
-		v.PublicEndpoint = successes[0].Mapped
+		v.PublicEndpoint = group[0].Mapped
 		v.Warnings = append(v.Warnings, WarnInsufficientProbes)
 		applyCGNAT(&v)
-		return v
-
 	default:
-		v.PublicEndpoint = successes[0].Mapped
+		v.PublicEndpoint = group[0].Mapped
 		allSame := true
-		for _, r := range successes[1:] {
-			if r.Mapped != successes[0].Mapped {
+		for _, r := range group[1:] {
+			if r.Mapped != group[0].Mapped {
 				allSame = false
 				break
 			}
@@ -193,8 +304,8 @@ func classifyMapping(results []probe.Result) Verdict {
 			v.Warnings = append(v.Warnings, WarnADMOrStricter)
 		}
 		applyCGNAT(&v)
-		return v
 	}
+	return v
 }
 
 // applyFiltering folds *probe.FilteringResult into the verdict. Updates

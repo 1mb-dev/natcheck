@@ -4,6 +4,24 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-04-26
+
+### Fixed
+
+- Cross-address-family probe sets no longer produce a wrong ADM/symmetric verdict. Previously, a probe set mixing IPv6-resolved hostname servers (e.g., `stun.l.google.com`) with IPv4-literal servers (e.g., a self-hosted coturn) compared mapped endpoints across address families and reported ADM because the endpoints differed by construction (each family observes its own NAT). The classifier now groups successes by address family, classifies each group independently, and combines under the rule "Unknown is absence of information, not disagreement": matching verdicts win, two confident verdicts that differ produce Unknown, a confident verdict beats Unknown from the other group. Closes #14.
+
+### Added
+
+- New warning value `mixed_address_family_probes` in `warnings[]`. Emitted whenever successful probes span both IPv4 and IPv6 address families. Additive to the JSON schema.
+
+### Migration note
+
+JSON consumers checking `nat_type == "ADM"` for cross-family probe sets will see `"Unknown"` on the same input under v0.1.3 — the previous verdict was incorrect. Forecast-checking consumers (`webrtc_forecast.direct_p2p`) are mostly unaffected: the dominant cross-family disagreement case stays exit 1 (Unknown → 1, was ADM → 1). The verdict-flip case (genuinely agreed EIM across families, previously ADM, now EIM → exit 0) is the bug being fixed.
+
+### Note on tag versioning
+
+v0.1.3 is the first 3-segment-semver tag after the v0.1.2.x patches; v0.1.2.1 and v0.1.2.2 were 4-segment tags incompatible with Go module versioning (proxy silently substituted a pseudo-version). See those releases' notes. From v0.1.3 onward, tags are 3-segment semver only.
+
 ## [0.1.2.2] — 2026-04-26
 
 ### Fixed
@@ -85,7 +103,8 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
 
-[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.2.2...HEAD
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.3
 [0.1.2.2]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2.2
 [0.1.2.1]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2.1
 [0.1.2]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2
