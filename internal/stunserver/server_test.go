@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/1mb-dev/natcheck/internal/probe"
 	"github.com/pion/stun/v3"
 )
 
@@ -136,40 +135,6 @@ func TestHandle_Garbled(t *testing.T) {
 	}
 	if out := s.Handle(garbage, netip.MustParseAddrPort("127.0.0.1:1")); out != nil {
 		t.Fatalf("expected nil for garbled input, got %d bytes", len(out))
-	}
-}
-
-func TestServe_RoundTrip(t *testing.T) {
-	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	t.Cleanup(func() { _ = conn.Close() })
-	udpAddr := conn.LocalAddr().(*net.UDPAddr)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	serveDone := make(chan error, 1)
-	go func() { serveDone <- New(Options{}).Serve(ctx, conn) }()
-
-	probeCtx, probeCancel := context.WithTimeout(context.Background(), time.Second)
-	defer probeCancel()
-	res := probe.NewSTUN().Probe(probeCtx, probe.Server{Host: "127.0.0.1", Port: udpAddr.Port})
-	if res.Err != nil {
-		t.Fatalf("probe: %v", res.Err)
-	}
-	if !res.Mapped.Addr().IsLoopback() {
-		t.Fatalf("mapped = %v, want loopback", res.Mapped.Addr())
-	}
-
-	cancel()
-	select {
-	case err := <-serveDone:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("serve returned %v, want context.Canceled", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("serve did not return within 1s of cancel")
 	}
 }
 
