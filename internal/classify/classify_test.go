@@ -28,14 +28,17 @@ func fail(host string, port int) probe.Result {
 
 func TestClassify(t *testing.T) {
 	cases := []struct {
-		name         string
-		results      []probe.Result
-		wantType     NATType
-		wantLegacy   string
-		wantCGNAT    bool
-		wantP2P      string
-		wantTURN     bool
-		wantWarnings []string // subset; WarnFilteringBehaviorNotTested is always asserted separately
+		name           string
+		results        []probe.Result
+		filtering      *probe.FilteringResult
+		wantType       NATType
+		wantLegacy     string
+		wantCGNAT      bool
+		wantFiltering  FilteringBehavior
+		wantP2P        string
+		wantTURN       bool
+		wantWarnings   []string // subset assertions
+		wantWarnAbsent []string // warnings that must NOT be present
 	}{
 		{
 			name:         "empty input — Blocked",
@@ -200,11 +203,32 @@ func TestClassify(t *testing.T) {
 			wantP2P:      "unknown",
 			wantWarnings: []string{WarnCGNATDetected},
 		},
+		{
+			// Reachable EIM+CGNAT+filtering integration: even with EIF data,
+			// CGNAT precedence keeps the forecast at "unknown".
+			name: "EIM + CGNAT + endpoint-independent filtering — CGNAT precedence holds",
+			results: []probe.Result{
+				ok("google", 19302, "100.64.1.5:51820", 10*time.Millisecond),
+				ok("cloudflare", 3478, "100.64.1.5:51820", 20*time.Millisecond),
+			},
+			filtering: &probe.FilteringResult{
+				Server:        probe.Server{Host: "stun.example.org", Port: 3478},
+				Test2Received: true,
+				Test3Received: true,
+			},
+			wantType:       EndpointIndependentMapping,
+			wantLegacy:     "cone",
+			wantCGNAT:      true,
+			wantFiltering:  FilteringEndpointIndependent,
+			wantP2P:        "unknown",
+			wantWarnings:   []string{WarnCGNATDetected},
+			wantWarnAbsent: []string{WarnFilteringBehaviorNotTested},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Classify(tc.results, nil)
+			got := Classify(tc.results, tc.filtering)
 
 			if got.Type != tc.wantType {
 				t.Errorf("Type = %v, want %v", got.Type, tc.wantType)
@@ -215,8 +239,8 @@ func TestClassify(t *testing.T) {
 			if got.CGNAT != tc.wantCGNAT {
 				t.Errorf("CGNAT = %v, want %v", got.CGNAT, tc.wantCGNAT)
 			}
-			if got.Filtering != FilteringUntested {
-				t.Errorf("Filtering = %v, want FilteringUntested (no filtering result passed)", got.Filtering)
+			if got.Filtering != tc.wantFiltering {
+				t.Errorf("Filtering = %v, want %v", got.Filtering, tc.wantFiltering)
 			}
 			if got.Forecast.DirectP2P != tc.wantP2P {
 				t.Errorf("DirectP2P = %q, want %q", got.Forecast.DirectP2P, tc.wantP2P)
@@ -224,13 +248,21 @@ func TestClassify(t *testing.T) {
 			if got.Forecast.TURNRequired != tc.wantTURN {
 				t.Errorf("TURNRequired = %v, want %v", got.Forecast.TURNRequired, tc.wantTURN)
 			}
-			if !hasWarning(got.Warnings, WarnFilteringBehaviorNotTested) {
+			// When no filtering data is supplied, the generic warning must be
+			// present (the v0.1 behaviour). When filtering data IS supplied,
+			// the per-case wantWarnAbsent assertion governs.
+			if tc.filtering == nil && !hasWarning(got.Warnings, WarnFilteringBehaviorNotTested) {
 				t.Errorf("Warnings missing %q (required when filtering not tested); got %v",
 					WarnFilteringBehaviorNotTested, got.Warnings)
 			}
 			for _, want := range tc.wantWarnings {
 				if !hasWarning(got.Warnings, want) {
 					t.Errorf("Warnings missing %q; got %v", want, got.Warnings)
+				}
+			}
+			for _, absent := range tc.wantWarnAbsent {
+				if hasWarning(got.Warnings, absent) {
+					t.Errorf("Warnings unexpectedly contains %q; got %v", absent, got.Warnings)
 				}
 			}
 		})
@@ -314,11 +346,12 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 		wantWarnAbsent string // warning that must NOT be present
 	}{
 		{
-			name:         "nil_filtering",
-			filtering:    nil,
-			wantBehavior: FilteringUntested,
-			wantP2P:      "likely",
-			wantWarnHas:  WarnFilteringBehaviorNotTested,
+			name:           "nil_filtering",
+			filtering:      nil,
+			wantBehavior:   FilteringUntested,
+			wantP2P:        "likely",
+			wantWarnHas:    WarnFilteringBehaviorNotTested,
+			wantWarnAbsent: WarnFilteringSkippedNoChangeRequest,
 		},
 		{
 			name:           "not_supported",
@@ -329,11 +362,12 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 			wantWarnAbsent: WarnFilteringBehaviorNotTested,
 		},
 		{
-			name:         "test1_failed",
-			filtering:    &probe.FilteringResult{Server: target, Err: probe.ErrTest1Failed},
-			wantBehavior: FilteringUntested,
-			wantP2P:      "likely",
-			wantWarnHas:  WarnFilteringBehaviorNotTested,
+			name:           "test1_failed",
+			filtering:      &probe.FilteringResult{Server: target, Err: probe.ErrTest1Failed},
+			wantBehavior:   FilteringUntested,
+			wantP2P:        "likely",
+			wantWarnHas:    WarnFilteringBehaviorNotTested,
+			wantWarnAbsent: WarnFilteringSkippedNoChangeRequest,
 		},
 		{
 			name: "endpoint_independent",
@@ -370,9 +404,10 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 			filtering: &probe.FilteringResult{
 				Server: target, Test2Received: true, Test3Received: false,
 			},
-			wantBehavior: FilteringUntested,
-			wantP2P:      "likely",
-			wantWarnHas:  WarnFilteringBehaviorNotTested,
+			wantBehavior:   FilteringUntested,
+			wantP2P:        "likely",
+			wantWarnHas:    WarnFilteringBehaviorNotTested,
+			wantWarnAbsent: WarnFilteringSkippedNoChangeRequest,
 		},
 	}
 	for _, tc := range cases {
@@ -407,8 +442,8 @@ func TestDecideForecast_Precedence(t *testing.T) {
 		v    Verdict
 		want Forecast
 	}{
-		{"cgnat_overrides_all", Verdict{Type: EndpointIndependentMapping, CGNAT: true, Filtering: FilteringEndpointIndependent}, Forecast{DirectP2P: "unknown"}},
-		{"cgnat_on_blocked", Verdict{Type: Blocked, CGNAT: true}, Forecast{DirectP2P: "unknown"}},
+		{"cgnat_overrides_eim_eif", Verdict{Type: EndpointIndependentMapping, CGNAT: true, Filtering: FilteringEndpointIndependent}, Forecast{DirectP2P: "unknown"}},
+		{"cgnat_overrides_eim_adf", Verdict{Type: EndpointIndependentMapping, CGNAT: true, Filtering: FilteringAddressDependent}, Forecast{DirectP2P: "unknown"}},
 		{"blocked_no_cgnat", Verdict{Type: Blocked}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
 		{"adm", Verdict{Type: AddressDependentMapping}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
 		{"apdm", Verdict{Type: AddressPortDependentMapping}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},

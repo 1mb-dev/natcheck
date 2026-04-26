@@ -107,8 +107,12 @@ type Verdict struct {
 	// §4.4 sequence did not run (no OTHER-ADDRESS support, or not attempted).
 	Filtering FilteringBehavior
 	// FilteringTestedAgainst is the server the §4.4 sequence ran against.
-	// Zero-value (Server{}) when filtering was not attempted, or when the
-	// server did not advertise OTHER-ADDRESS so no sequence ran.
+	// Zero-value (Server{}) when Filtering == FilteringUntested, which
+	// happens in any of these cases:
+	//   - no FilteringResult was supplied (filtering not attempted);
+	//   - the server did not advertise OTHER-ADDRESS (ErrFilteringNotSupported);
+	//   - the initial Test 1 binding probe failed (ErrTest1Failed);
+	//   - the (T2=true, T3=false) RFC-impossible state was observed.
 	FilteringTestedAgainst probe.Server
 	Warnings               []string
 	Forecast               Forecast

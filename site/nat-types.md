@@ -88,8 +88,10 @@ Probes:
   stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
   stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
 
-Filtering not tested (v0.1).
+Filtering not tested.
 ```
+
+Filtering classification (RFC 5780 §4.4) activates automatically when `--server` points at a server that advertises `OTHER-ADDRESS` — coturn does, the public defaults don't. See [coturn setup](https://github.com/1mb-dev/natcheck/blob/main/docs/coturn-setup.md) for a one-page recipe.
 
 On CGNAT, natcheck reports `unknown` rather than guessing. Behind a CGNAT carrier (T-Mobile US, Jio, Starlink, others)? Help calibrate the verdict — see [issue #6](https://github.com/1mb-dev/natcheck/issues/6).
 
