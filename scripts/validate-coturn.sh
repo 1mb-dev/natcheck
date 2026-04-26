@@ -3,23 +3,28 @@
 #
 # Run on a fresh Debian/Ubuntu droplet (DO, Linode, Vultr, Hetzner, ...) as root:
 #
-#   # from the droplet, after SSH:
-#   curl -fsSL https://raw.githubusercontent.com/1mb-dev/natcheck/main/scripts/validate-coturn.sh | bash
+#   # AWS/GCP topology (public IP NAT'd to private NIC IP — two distinct
+#   # routable IPs already), no env var needed:
+#   ssh root@<vm-ip> 'bash -s' < scripts/validate-coturn.sh
 #
-#   # or, from your laptop in one line:
-#   ssh root@<droplet-ip> 'bash -s' < scripts/validate-coturn.sh
+#   # Single-public-IP providers (DO basic droplet, Linode Nanode, Hetzner
+#   # single-IP) — attach a second routable IP first (DO Reserved IP /
+#   # Linode Extra IP / Hetzner Floating IP), then pass via env var:
+#   ssh root@<vm-ip> "SECOND_IP=<reserved-ip> bash -s" < scripts/validate-coturn.sh
 #
 # What it does:
 #   1. apt-installs coturn (4.x)
-#   2. detects PUBLIC and PRIVATE IPs and writes /etc/turnserver.conf using the
-#      v0.1.2.1 conf shape (rfc5780 + external-ip pair form)
-#   3. opens UDP 3478/3479 in ufw (allowing OpenSSH first so you don't lock out)
-#   4. starts coturn in a tmux session, logs to /var/log/coturn-natcheck.log
-#   5. greps the log for the two specific WARNING/INFO lines that signal a
+#   2. detects the VM's public + private NIC IPs; if SECOND_IP is set, aliases
+#      it to the NIC and uses the multi-IP conf form
+#   3. writes /etc/turnserver.conf (two listening-ip + two external-ip pairs +
+#      rfc5780 directive)
+#   4. opens UDP 3478/3479 in ufw (allowing OpenSSH first so you don't lock out)
+#   5. starts coturn in a tmux session, logs to /var/log/coturn-natcheck.log
+#   6. greps the log for the two specific WARNING/INFO lines that signal a
 #      misconfigured §4.4 path; exits non-zero if either is present
-#   6. prints the natcheck command to run from your laptop
+#   7. prints the natcheck command to run from your laptop
 #
-# When done capturing samples: `poweroff` is NOT enough — destroy the droplet
+# When done capturing samples: `poweroff` is NOT enough — destroy the VM
 # from the cloud dashboard. Hourly billing continues until destroy.
 
 set -euo pipefail
@@ -59,8 +64,33 @@ fi
 
 echo "    PUBLIC_IP=$PUBLIC_IP"
 echo "    PRIVATE_IP=$PRIVATE_IP (on $PRIVATE_NIC)"
-echo "    They will differ on a typical cloud VM. If they match, that's a"
-echo "    single-NIC configuration where coturn still needs the pair form."
+
+# coturn requires TWO distinct routable IPs (see docs/coturn-setup.md).
+# Topology branches:
+#   AWS/GCP/Azure: PUBLIC_IP and PRIVATE_IP differ — use both directly.
+#   Single-public-IP providers (DO basic, Linode Nanode, Hetzner single-IP):
+#     they're equal, and there is no second routable IP available natively.
+#     Caller must attach a second IP and pass it via SECOND_IP env var; the
+#     script then aliases it to the NIC and writes the multi-IP conf form.
+if [[ -n "${SECOND_IP:-}" ]]; then
+    echo "    SECOND_IP=$SECOND_IP (from env — multi-IP form)"
+    if ! ip -4 addr show "$PRIVATE_NIC" | grep -q "$SECOND_IP/"; then
+        echo "==> Aliasing SECOND_IP $SECOND_IP onto $PRIVATE_NIC..."
+        ip addr add "$SECOND_IP/32" dev "$PRIVATE_NIC"
+    fi
+    FIRST_LINE="$PUBLIC_IP"
+    SECOND_LINE="$SECOND_IP"
+elif [[ "$PUBLIC_IP" != "$PRIVATE_IP" ]]; then
+    echo "    (AWS/GCP-style topology — public ≠ private, using both as the two distinct IPs)"
+    FIRST_LINE="$PUBLIC_IP"
+    SECOND_LINE="$PRIVATE_IP"
+else
+    echo "    (Single-public-IP VM — no SECOND_IP env var. coturn needs two distinct"
+    echo "     routable IPs; this conf will fail verification. Re-run with"
+    echo "     SECOND_IP=<reserved-or-floating-ip> to enable §4.4 — see docs/coturn-setup.md.)"
+    FIRST_LINE="$PUBLIC_IP"
+    SECOND_LINE="$PUBLIC_IP"
+fi
 echo
 
 echo "==> Installing coturn + tmux..."
@@ -76,13 +106,14 @@ cat > "$CONF_FILE" <<EOF
 
 listening-port=3478
 alt-listening-port=3479
-listening-ip=0.0.0.0
+listening-ip=$FIRST_LINE
+listening-ip=$SECOND_LINE
+external-ip=$FIRST_LINE/$FIRST_LINE
+external-ip=$SECOND_LINE/$SECOND_LINE
 
-# Pair form is required even on a single-NIC VM; bare external-ip triggers
-# "STUN CHANGE_REQUEST not supported: only one IP address is provided".
-external-ip=$PUBLIC_IP/$PRIVATE_IP
-
-# coturn 4.x defaults RFC 5780 NAT behavior discovery to OFF.
+# Required on coturn 4.10+ (RFC 5780 default flipped to OFF). Cosmetic
+# "Bad configuration format" warning on 4.5/4.6 — harmless, kept for
+# forward compat.
 rfc5780
 
 no-auth
