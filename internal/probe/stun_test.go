@@ -3,9 +3,11 @@ package probe
 import (
 	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
+	"github.com/1mb-dev/natcheck/internal/stunserver"
 	"github.com/pion/stun/v3"
 )
 
@@ -87,16 +89,13 @@ func (f *fakeSTUN) serve() {
 func buildResponse(behavior fakeBehavior, req *stun.Message, udp *net.UDPAddr) []byte {
 	switch behavior {
 	case behaviorNormal:
-		resp, err := stun.Build(
-			stun.NewTransactionIDSetter(req.TransactionID),
-			stun.BindingSuccess,
-			&stun.XORMappedAddress{IP: udp.IP, Port: udp.Port},
-		)
-		if err != nil {
-			return nil
-		}
-		return resp.Raw
+		addr, _ := netip.AddrFromSlice(udp.IP)
+		src := netip.AddrPortFrom(addr.Unmap(), uint16(udp.Port))
+		return stunserver.New(stunserver.Options{}).Handle(req.Raw, src)
 
+	// The branches below intentionally produce non-conforming or absent
+	// responses. They exist to validate probe-client robustness against
+	// misbehaving servers, which stunserver.Handle by design never produces.
 	case behaviorWrongTxID:
 		var wrong [stun.TransactionIDSize]byte
 		for i := range wrong {
