@@ -122,6 +122,22 @@ func (s *Server) Serve(ctx context.Context, conn net.PacketConn) error {
 	}
 }
 
+// BuildChangeRequest returns a CHANGE-REQUEST attribute (RFC 5780 §7.2)
+// suitable for passing to stun.Build alongside other setters. Bit A (0x04)
+// requests CHANGE-IP; bit B (0x02) requests CHANGE-PORT.
+func BuildChangeRequest(changeIP, changePort bool) stun.RawAttribute {
+	var v uint32
+	if changeIP {
+		v |= 0x04
+	}
+	if changePort {
+		v |= 0x02
+	}
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], v)
+	return stun.RawAttribute{Type: stun.AttrChangeRequest, Length: 4, Value: b[:]}
+}
+
 // ParseChangeRequest extracts CHANGE-REQUEST flags from a STUN BindingRequest.
 // Returns ok=false for messages other than BindingRequest, malformed STUN,
 // missing CHANGE-REQUEST attribute, or attribute payloads not exactly 4 bytes.
