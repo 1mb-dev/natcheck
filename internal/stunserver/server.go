@@ -2,12 +2,14 @@
 //
 // The package exposes two consumption modes built on the same Handle function:
 // pure byte-in/byte-out for in-process tests, and a PacketConn dispatch loop
-// for use as a long-running responder. Currently supports plain BindingRequest;
-// CHANGE-REQUEST handling planned per docs/design.md v0.2 addendum.
+// for use as a long-running responder. Supports BindingRequest with optional
+// OTHER-ADDRESS responses (RFC 5780 §7.4). CHANGE-REQUEST routing is a caller
+// concern — use ParseChangeRequest to extract flags from incoming requests.
 package stunserver
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"net"
 	"net/netip"
@@ -16,20 +18,24 @@ import (
 	"github.com/pion/stun/v3"
 )
 
-// Options configures a Server. Empty for the plain-Binding responder;
-// CHANGE-REQUEST-related fields (AltIP, AltPort) join when CHANGE-REQUEST
-// support lands.
-type Options struct{}
+// Options configures a Server.
+type Options struct {
+	// Other is the address of the diagonal peer in an RFC 5780 §3 four-corner
+	// topology. When set, Handle includes an OTHER-ADDRESS attribute pointing
+	// to it. Zero-value disables the attribute.
+	Other netip.AddrPort
+}
 
 // Server is a stateless STUN responder. Construct via New. Handle is pure and
 // safe for concurrent use across goroutines. Serve owns its PacketConn — do
 // not call Serve concurrently with the same conn.
-type Server struct{}
+type Server struct {
+	opts Options
+}
 
 // New returns a Server configured with opts.
 func New(opts Options) *Server {
-	_ = opts
-	return &Server{}
+	return &Server{opts: opts}
 }
 
 // Handle processes a single STUN request and returns the wire bytes of the
@@ -48,11 +54,17 @@ func (s *Server) Handle(req []byte, src netip.AddrPort) []byte {
 	if msg.Type != stun.BindingRequest {
 		return nil
 	}
-	resp, err := stun.Build(
+	srcAddr := src.Addr().Unmap()
+	setters := []stun.Setter{
 		stun.NewTransactionIDSetter(msg.TransactionID),
 		stun.BindingSuccess,
-		&stun.XORMappedAddress{IP: src.Addr().AsSlice(), Port: int(src.Port())},
-	)
+		&stun.XORMappedAddress{IP: srcAddr.AsSlice(), Port: int(src.Port())},
+	}
+	if s.opts.Other.IsValid() {
+		o := s.opts.Other.Addr().Unmap()
+		setters = append(setters, &stun.OtherAddress{IP: o.AsSlice(), Port: int(s.opts.Other.Port())})
+	}
+	resp, err := stun.Build(setters...)
 	if err != nil {
 		return nil
 	}
@@ -108,4 +120,26 @@ func (s *Server) Serve(ctx context.Context, conn net.PacketConn) error {
 		}
 		_, _ = conn.WriteTo(resp, from)
 	}
+}
+
+// ParseChangeRequest extracts CHANGE-REQUEST flags from a STUN BindingRequest.
+// Returns ok=false for messages other than BindingRequest, malformed STUN,
+// missing CHANGE-REQUEST attribute, or attribute payloads not exactly 4 bytes.
+func ParseChangeRequest(req []byte) (changeIP, changePort, ok bool) {
+	msg := &stun.Message{Raw: req}
+	if err := msg.Decode(); err != nil {
+		return false, false, false
+	}
+	if msg.Type != stun.BindingRequest {
+		return false, false, false
+	}
+	v, err := msg.Get(stun.AttrChangeRequest)
+	if err != nil || len(v) != 4 {
+		return false, false, false
+	}
+	// RFC 5780 §7.2: bit A (0x04) = change IP, bit B (0x02) = change port.
+	// Other bits MUST be zero per RFC; we extract A/B only and ignore the
+	// rest (matches phase 1's silent-drop posture for diagnostic responder).
+	flags := binary.BigEndian.Uint32(v)
+	return flags&0x04 != 0, flags&0x02 != 0, true
 }
