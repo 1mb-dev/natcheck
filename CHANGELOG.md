@@ -4,6 +4,18 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.2.2] — 2026-04-26
+
+### Fixed
+
+- `examples/coturn-natcheck.conf` and `docs/coturn-setup.md` now describe and ship the multi-IP conf form (two `listening-ip` + two `external-ip` pairs). v0.1.2.1's single-pair form (`external-ip=PUBLIC/PRIVATE`) only works on AWS/GCP-style topology where the public IP is NAT'd to a separate private NIC IP. On single-public-IP providers (DigitalOcean basic droplet, Linode Nanode, Hetzner single-IP), the public IP IS on eth0 directly and `external-ip=A/A` doesn't satisfy coturn's "two distinct IPs" requirement — coturn logs `WARNING: ... only one IP address is provided` and natcheck reports `filtering: untested`. New per-provider topology table in `docs/coturn-setup.md` with worked DO Reserved IP example.
+
+### Added
+
+- `scripts/validate-coturn.sh`: one-shot SSH-pipe provisioner that installs coturn, writes the conf, opens the firewall, and verifies coturn's startup log for the two warning lines that signal a misconfigured §4.4 path. Honest failure: exits non-zero with `FAIL: ...` if either warning appears, so a misconfigured droplet doesn't silently produce `filtering: untested` samples. Accepts `SECOND_IP=<addr>` env var for single-public-IP providers — aliases the IP to the NIC and uses the multi-IP conf form.
+
+No code or schema delta.
+
 ## [0.1.2.1] — 2026-04-26
 
 ### Fixed
@@ -73,7 +85,8 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
 
-[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.2.1...HEAD
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.2.2...HEAD
+[0.1.2.2]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2.2
 [0.1.2.1]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2.1
 [0.1.2]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2
 [0.1.1]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.1
