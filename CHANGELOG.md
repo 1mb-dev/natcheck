@@ -4,6 +4,33 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- RFC 5780 §4.4 filtering classification when the target STUN server advertises `OTHER-ADDRESS`. natcheck runs the three-step CHANGE-REQUEST sequence and reports `endpoint-independent`, `address-dependent`, `address-and-port-dependent`, or `untested` filtering.
+- Top-level `"filtering"` object in `--json` output. Always present. `tested_against` field omitted when behavior is `untested`.
+- WebRTC forecast value `"possible"` now emitted for EIM mappings combined with restrictive (address-dependent or address-and-port-dependent) filtering.
+- `examples/coturn-natcheck.conf` + [`docs/coturn-setup.md`](docs/coturn-setup.md): minimum coturn config for filtering classification and a one-page setup guide.
+- `internal/stunserver` package (foundation for v0.1.4's `natcheck server` subcommand).
+
+### Changed
+
+- Default-server users (Google, Cloudflare) see no extra latency: filtering classification is skipped when no probe response advertises `OTHER-ADDRESS`. coturn / `natcheck server` users get filtering automatically.
+- `--timeout` flag help: now notes that filtering classification adds up to 1.5s when applicable.
+
+### JSON schema (additive — strict consumers update)
+
+- New top-level key: `"filtering": {"behavior": "...", "tested_against": "..."}`. Always present from this release onward; `tested_against` omitted when `behavior == "untested"`.
+- New warning value in `warnings[]`: `"filtering_skipped_no_change_request"` (server response did not include `OTHER-ADDRESS`, so the §4.4 sequence could not run).
+- The existing `"filtering_behavior_not_tested"` warning is still emitted when filtering classification was not attempted at all (no server in the probe set advertised `OTHER-ADDRESS`).
+
+Consumers doing strict equality on the entire JSON blob need to expect the new `filtering` key. Field-level consumers (e.g., `jq '.nat_type'`) are unaffected.
+
+### Known limitations (deferred)
+
+- Hairpinning detection — planned for v0.1.3.
+- `natcheck server` subcommand — planned for v0.1.4.
+- `WarnFilteringPartial` warning (one or more CHANGE-REQUEST probes failed in transit) — current `FilteringResult` shape can't distinguish "filter blocked" from "transport error", so the warning is not emitted. Will return when the probe-side gains the necessary granularity.
+
 ## [0.1.1] — 2026-04-19
 
 ### Fixed
