@@ -1,9 +1,9 @@
 # natcheck — Architecture
 
-> Status: pre-v0.1 (implementation in progress)
-> Last updated: 2026-04-19
+> Status: v0.1.1 shipped. v0.2 design contract added as addendum at end of document.
+> Last updated: 2026-04-26
 
-Product framing and technical spec for v0.1 in one document. Working notes, per-phase plans, and open decisions live in `todos/HANDOFF.md` and `todos/releases/v0.1.0/` (dev-internal, not tracked in git).
+Product framing and technical spec. v0.1 spec lives in this document as shipped; v0.2 design is the addendum at the end. Working notes and per-phase plans live in `todos/` (dev-internal, not tracked in git).
 
 ## Problem
 
@@ -312,4 +312,217 @@ No live-network test in CI. Manual verification against real networks before rel
 - `--server` accepts user input; validate `host:port` shape before handing to `pion/stun`.
 - Treat STUN responses as untrusted: `pion/stun` handles parsing. No further eval.
 - No subprocess execution. No file I/O (no config file in v0.1).
+
+---
+
+# v0.2 design (addendum)
+
+> Added: 2026-04-26
+> Status: design contract. Implementation staged across v0.1.2 → v0.1.3 → v0.1.4 → v0.2.0 patches.
+
+## Goal
+
+RFC 5780 parity with `pion/stun-nat-behaviour` on protocol rigor while preserving the v0.1 UX contract: one command, pinned JSON, honest CGNAT handling, layered exit codes.
+
+## Staged sequence
+
+v0.2 is a milestone reached via four bisectable patches, not a single release. Each patch is independently shippable with real user value.
+
+| Patch | Adds |
+|---|---|
+| **v0.1.2** | RFC 5780 §4.4 filtering classification (capability-driven via `--server` advertising `OTHER-ADDRESS`); JSON `filtering` object; classifier upgrade emitting reserved `possible`; coturn reference config asset + setup doc |
+| **v0.1.3** | Hairpinning detection via two local sockets, parallel with mapping probes; JSON `hairpinning` field |
+| **v0.1.4** | `natcheck server` subcommand: stateless RFC 5780 §3 STUN responder. Promoted from in-process responder via shared `internal/stunserver/` package |
+| **v0.2.0** | Version bump; README + site copy reconciliation; CHANGELOG with v0.1 → v0.2 JSON migration section |
+
+v0.2.0 is the line where downstream consumers can rely on the new schema fields.
+
+## JSON schema delta (additive only)
+
+```jsonc
+{
+  // existing v0.1 fields unchanged
+  "nat_type": "EIM",
+  "nat_type_legacy": "cone",
+  "public_endpoint": "203.0.113.45:51820",
+  "probes": [...],
+  "webrtc_forecast": { "direct_p2p": "likely", "turn_required": false },
+  "warnings": [],
+
+  // NEW in v0.1.2
+  "filtering": {
+    "behavior": "endpoint-independent" | "address-dependent" | "address-and-port-dependent" | "untested",
+    "tested_against": "stun.example.com:3478"
+  },
+
+  // NEW in v0.1.3
+  "hairpinning": true | false | null
+}
+```
+
+- `filtering.tested_against` is omitted when `behavior == "untested"`.
+- `hairpinning: null` distinguishes "tested and false" from "didn't try."
+- Schema additivity discipline: once these fields ship, all future filtering / hairpinning fields nest under their respective objects or break the v0.1.2 / v0.1.3 contract.
+
+A v0.1-equivalent golden fixture (filtering=untested, hairpinning=null) is pinned as a regression check on the omitted-field path.
+
+## CLI delta
+
+### Client side: no new flags
+
+Filtering activates automatically when the configured server's Binding response includes `OTHER-ADDRESS`. Hairpinning runs by default — local-only, parallel with mapping probes, no wall-clock cost in the common case.
+
+Verbose output emits coded warning constants in `warnings[]`:
+
+| Constant | Condition |
+|---|---|
+| `WarnFilteringSkippedNoChangeRequest` | Server didn't advertise `OTHER-ADDRESS` |
+| `WarnFilteringPartial` | One or more CHANGE-REQUEST probes failed |
+| `WarnHairpinUntested` | Local socket allocation failed; hairpinning probe could not run |
+
+No free-text warning strings.
+
+### Server side (v0.1.4)
+
+```
+natcheck server [--listen :3478] [--alt :3479] [--external-ip <addr>]
+```
+
+Flat invocation. No auth, no TLS, no rate limiting in v0.2 — diagnostic-test posture, mirroring the bundled coturn reference config. Documented as a diagnostic instance, not a production STUN service.
+
+## Filtering classification (v0.1.2)
+
+Implements RFC 5780 §4.4. Sequence:
+
+1. Standard Binding request to a server advertising `OTHER-ADDRESS` (the cooperating server).
+2. Binding with `CHANGE-REQUEST = CHANGE-IP | CHANGE-PORT` — server responds from alternate IP and port.
+3. Binding with `CHANGE-REQUEST = CHANGE-PORT` — server responds from same IP, alternate port.
+
+Outcome mapping:
+
+| Test 2 reply | Test 3 reply | Filtering |
+|---|---|---|
+| received | received | endpoint-independent |
+| not received | received | address-dependent |
+| not received | not received | address-and-port-dependent |
+
+If the server doesn't advertise `OTHER-ADDRESS`, all filtering tests skip; `WarnFilteringSkippedNoChangeRequest` is emitted; `filtering.behavior = "untested"`.
+
+## Hairpinning detection (v0.1.3)
+
+Two local UDP sockets, parallel with mapping probes:
+
+1. Allocate sockets A and B.
+2. STUN-probe each (concurrent with the existing `--server` probes, no extra round-trip cost) to obtain mapped endpoints `mA`, `mB`.
+3. From A, send a uniquely-tagged UDP packet to `mB`.
+4. Listen on B for `T_hairpin` (default 1s).
+
+Result:
+
+- Tagged packet arrives → `hairpinning: true`
+- Timeout → `hairpinning: false`
+- A or B's STUN probe failed → `hairpinning: null` + `WarnHairpinUntested`
+
+Documented limitation: false-negative possible if the NAT applies port-restricted filtering on the hairpin path. Test case in `internal/probe/hairpin_test.go` simulates this scenario via the existing fake-responder pattern.
+
+## `natcheck server` subcommand (v0.1.4)
+
+Stateless RFC 5780 §3 STUN responder.
+
+In scope:
+
+- STUN Binding response with `XOR-MAPPED-ADDRESS`.
+- `CHANGE-REQUEST` handling: respond from alt-port, and from alt-IP if `--external-ip` is set.
+- `OTHER-ADDRESS` advertised in every response.
+- Structured logs to stderr.
+
+Out of scope for v0.2 (deliberate, not demand-gated):
+
+- TLS / DTLS termination.
+- Auth or rate limiting.
+- Persistence, metrics endpoint, or admin surface.
+- TURN allocation handling.
+
+Diagnostic-test posture is the deliberate v0.2 shape, mirroring the bundled coturn config. Production hardening is a separate decision after v0.2.0 ships, evaluated on its own merit.
+
+### Code organization
+
+`internal/stunserver/` is the responder API boundary. Public surface:
+
+```go
+package stunserver
+
+func New(opts Options) *Server
+func (s *Server) Handle(req []byte, src netip.AddrPort) []byte
+func (s *Server) Serve(ctx context.Context, conn net.PacketConn) error
+```
+
+- `Handle` is pure: byte-in, byte-out, no I/O. Used directly by the in-process test fake via in-memory channels.
+- `Serve` wraps `Handle` with a real `net.PacketConn` dispatch loop. Used by the `natcheck server` subcommand.
+- One implementation, two consumption modes. Single source of truth for RFC 5780 §3 responder behavior.
+
+`cmd/natcheck/server.go` is flag parsing plus `stunserver.Serve(ctx, opts)`. If responder logic leaks into `cmd/natcheck/`, it is a bug.
+
+`Handle` is unit-tested as a pure function (response construction, CHANGE-REQUEST flag parsing, OTHER-ADDRESS attribute placement). `Serve` is integration-tested with real sockets. The split follows what is actually being tested, not what coverage tools prefer.
+
+## Classifier upgrade
+
+`internal/classify` extends to consume `filtering.behavior` and `hairpinning` when present. The `webrtc_forecast.direct_p2p` enum surface is unchanged; the value distribution shifts:
+
+| Available data | Forecast change vs. v0.1 |
+|---|---|
+| Mapping only (no filtering, no hairpinning) | Identical to v0.1 |
+| + Filtering data | `unknown` cases drop where filtering disambiguates EIM-with-restrictive-filtering from true APDM. `possible` starts emitting for EIM × Address-Dependent Filtering combinations. |
+| + Hairpinning data | Refines the `possible` / `likely` boundary for cases where hairpinning matters (e.g., behind-the-same-NAT peers). |
+| + CGNAT calibration sample (issue #6) | Carrier-tagged `possible` or `unlikely` replaces `unknown` for matching public IPs. |
+
+Forecast field stays singular. The UX promise — "one command, one answer" — is preserved.
+
+## coturn reference config (v0.1.2)
+
+`examples/coturn-natcheck.conf`:
+
+```conf
+listening-port=3478
+alt-listening-port=3479
+listening-ip=0.0.0.0
+external-ip=YOUR_PUBLIC_IP
+no-auth
+no-tls
+no-dtls
+log-file=stdout
+```
+
+Setup doc (`docs/coturn-setup.md`): one page, three sections — what it is, how to run it, how to point natcheck at it. Explicit warnings:
+
+- `no-auth no-tls no-dtls` is **diagnostic-test only**, not a production TURN/STUN service.
+- `external-ip` on cloud VMs is the public IP, not the network interface IP. Common stumbling block.
+
+References coturn's own README for everything beyond the natcheck-specific config.
+
+## Validation strategy for v0.2.0 ship
+
+Project-owner one-shot:
+
+1. Spin up `natcheck server` on a $5 VPS.
+2. Run `natcheck --server <vps>:3478` from at least three different client networks.
+3. Capture one redacted sample to `docs/samples/filtering.txt`.
+4. Tear down the VPS after capture.
+
+No project-run reference instance committed in v0.2. Whether to run a public reference instance is a separate decision after v0.2.0 ships, evaluated on operational cost vs. user-onboarding leverage.
+
+## v0.2 non-goals (explicit)
+
+- TURN probing — v0.3.
+- IPv6 as a tested contract — v0.3.
+- Multi-interface enumeration — v0.3.
+- `natcheck server` production hardening (auth, TLS, rate limiting, metrics) — separate decision after v0.2.0.
+- Project-run public reference instance — separate decision after v0.2.0.
+
+## Risks
+
+1. **`natcheck server` adoption depends on users having a VPS.** Mitigation: coturn reference config also ships; users with existing TURN/STUN infrastructure are not forced to natcheck-server.
+2. **Hairpinning two-socket method has documented false-negative cases.** Mitigation: limitation documented, explicit test case, `null` value distinguished from `false`.
+3. **Schema additivity discipline.** Once `filtering.{behavior, tested_against}` and `hairpinning` ship, all future fields nest there or break the contract.
+4. **Diagnostic-posture servers operated as production.** Mitigation: setup docs and `natcheck server --help` explicitly warn that the bundled config and the subcommand are not production STUN services. Production hardening is a separate decision after v0.2.0 ships.
 
