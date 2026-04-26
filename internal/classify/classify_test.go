@@ -204,7 +204,7 @@ func TestClassify(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Classify(tc.results)
+			got := Classify(tc.results, nil)
 
 			if got.Type != tc.wantType {
 				t.Errorf("Type = %v, want %v", got.Type, tc.wantType)
@@ -215,8 +215,8 @@ func TestClassify(t *testing.T) {
 			if got.CGNAT != tc.wantCGNAT {
 				t.Errorf("CGNAT = %v, want %v", got.CGNAT, tc.wantCGNAT)
 			}
-			if got.FilteringTested {
-				t.Errorf("FilteringTested = true, want false (invariant in v0.1)")
+			if got.Filtering != FilteringUntested {
+				t.Errorf("Filtering = %v, want FilteringUntested (no filtering result passed)", got.Filtering)
 			}
 			if got.Forecast.DirectP2P != tc.wantP2P {
 				t.Errorf("DirectP2P = %q, want %q", got.Forecast.DirectP2P, tc.wantP2P)
@@ -225,7 +225,7 @@ func TestClassify(t *testing.T) {
 				t.Errorf("TURNRequired = %v, want %v", got.Forecast.TURNRequired, tc.wantTURN)
 			}
 			if !hasWarning(got.Warnings, WarnFilteringBehaviorNotTested) {
-				t.Errorf("Warnings missing %q (always required in v0.1); got %v",
+				t.Errorf("Warnings missing %q (required when filtering not tested); got %v",
 					WarnFilteringBehaviorNotTested, got.Warnings)
 			}
 			for _, want := range tc.wantWarnings {
@@ -240,10 +240,10 @@ func TestClassify(t *testing.T) {
 // TestClassify_NilSafe: the brain of the tool must not panic on degenerate
 // inputs. Callers may hand us nil or zero-value results in error paths.
 func TestClassify_NilSafe(t *testing.T) {
-	_ = Classify(nil)
-	_ = Classify([]probe.Result{})
-	_ = Classify([]probe.Result{{}})         // zero-value result
-	_ = Classify([]probe.Result{{}, {}, {}}) // multiple zero-value
+	_ = Classify(nil, nil)
+	_ = Classify([]probe.Result{}, nil)
+	_ = Classify([]probe.Result{{}}, nil)         // zero-value result
+	_ = Classify([]probe.Result{{}, {}, {}}, nil) // multiple zero-value
 }
 
 // TestNATType_String covers every branch.
@@ -270,4 +270,160 @@ func hasWarning(ws []string, w string) bool {
 		}
 	}
 	return false
+}
+
+// TestFilteringBehavior_String covers every branch.
+func TestFilteringBehavior_String(t *testing.T) {
+	cases := map[FilteringBehavior]string{
+		FilteringUntested:                "untested",
+		FilteringEndpointIndependent:     "endpoint-independent",
+		FilteringAddressDependent:        "address-dependent",
+		FilteringAddressAndPortDependent: "address-and-port-dependent",
+		FilteringBehavior(999):           "untested",
+	}
+	for b, want := range cases {
+		if got := b.String(); got != want {
+			t.Errorf("FilteringBehavior(%d).String() = %q, want %q", b, got, want)
+		}
+	}
+}
+
+// TestClassify_FilteringMatrix covers FilteringResult → Verdict.Filtering and
+// the forecast updates for EIM mappings.
+func TestClassify_FilteringMatrix(t *testing.T) {
+	eimProbes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.example.org", Port: 3478},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
+		},
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+		},
+	}
+	target := probe.Server{Host: "stun.example.org", Port: 3478}
+
+	cases := []struct {
+		name           string
+		filtering      *probe.FilteringResult
+		wantBehavior   FilteringBehavior
+		wantP2P        string
+		wantTested     bool
+		wantWarnHas    string // warning that must be present
+		wantWarnAbsent string // warning that must NOT be present
+	}{
+		{
+			name:         "nil_filtering",
+			filtering:    nil,
+			wantBehavior: FilteringUntested,
+			wantP2P:      "likely",
+			wantWarnHas:  WarnFilteringBehaviorNotTested,
+		},
+		{
+			name:           "not_supported",
+			filtering:      &probe.FilteringResult{Server: target, Err: probe.ErrFilteringNotSupported},
+			wantBehavior:   FilteringUntested,
+			wantP2P:        "likely",
+			wantWarnHas:    WarnFilteringSkippedNoChangeRequest,
+			wantWarnAbsent: WarnFilteringBehaviorNotTested,
+		},
+		{
+			name:         "test1_failed",
+			filtering:    &probe.FilteringResult{Server: target, Err: probe.ErrTest1Failed},
+			wantBehavior: FilteringUntested,
+			wantP2P:      "likely",
+			wantWarnHas:  WarnFilteringBehaviorNotTested,
+		},
+		{
+			name: "endpoint_independent",
+			filtering: &probe.FilteringResult{
+				Server: target, Test2Received: true, Test3Received: true,
+			},
+			wantBehavior:   FilteringEndpointIndependent,
+			wantP2P:        "likely",
+			wantTested:     true,
+			wantWarnAbsent: WarnFilteringBehaviorNotTested,
+		},
+		{
+			name: "address_dependent",
+			filtering: &probe.FilteringResult{
+				Server: target, Test2Received: false, Test3Received: true,
+			},
+			wantBehavior:   FilteringAddressDependent,
+			wantP2P:        "possible",
+			wantTested:     true,
+			wantWarnAbsent: WarnFilteringBehaviorNotTested,
+		},
+		{
+			name: "address_and_port_dependent",
+			filtering: &probe.FilteringResult{
+				Server: target, Test2Received: false, Test3Received: false,
+			},
+			wantBehavior:   FilteringAddressAndPortDependent,
+			wantP2P:        "possible",
+			wantTested:     true,
+			wantWarnAbsent: WarnFilteringBehaviorNotTested,
+		},
+		{
+			name: "rfc_impossible_t2_true_t3_false",
+			filtering: &probe.FilteringResult{
+				Server: target, Test2Received: true, Test3Received: false,
+			},
+			wantBehavior: FilteringUntested,
+			wantP2P:      "likely",
+			wantWarnHas:  WarnFilteringBehaviorNotTested,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Classify(eimProbes, tc.filtering)
+			if got.Filtering != tc.wantBehavior {
+				t.Errorf("Filtering = %v, want %v", got.Filtering, tc.wantBehavior)
+			}
+			if got.Forecast.DirectP2P != tc.wantP2P {
+				t.Errorf("DirectP2P = %q, want %q", got.Forecast.DirectP2P, tc.wantP2P)
+			}
+			if tc.wantTested && got.FilteringTestedAgainst != target {
+				t.Errorf("FilteringTestedAgainst = %v, want %v", got.FilteringTestedAgainst, target)
+			}
+			if !tc.wantTested && got.FilteringTestedAgainst != (probe.Server{}) {
+				t.Errorf("FilteringTestedAgainst = %v, want zero", got.FilteringTestedAgainst)
+			}
+			if tc.wantWarnHas != "" && !hasWarning(got.Warnings, tc.wantWarnHas) {
+				t.Errorf("Warnings missing %q; got %v", tc.wantWarnHas, got.Warnings)
+			}
+			if tc.wantWarnAbsent != "" && hasWarning(got.Warnings, tc.wantWarnAbsent) {
+				t.Errorf("Warnings unexpectedly contains %q; got %v", tc.wantWarnAbsent, got.Warnings)
+			}
+		})
+	}
+}
+
+// TestDecideForecast_Precedence covers the forecast decision tree directly.
+func TestDecideForecast_Precedence(t *testing.T) {
+	cases := []struct {
+		name string
+		v    Verdict
+		want Forecast
+	}{
+		{"cgnat_overrides_all", Verdict{Type: EndpointIndependentMapping, CGNAT: true, Filtering: FilteringEndpointIndependent}, Forecast{DirectP2P: "unknown"}},
+		{"cgnat_on_blocked", Verdict{Type: Blocked, CGNAT: true}, Forecast{DirectP2P: "unknown"}},
+		{"blocked_no_cgnat", Verdict{Type: Blocked}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
+		{"adm", Verdict{Type: AddressDependentMapping}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
+		{"apdm", Verdict{Type: AddressPortDependentMapping}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
+		{"unknown_mapping", Verdict{Type: Unknown}, Forecast{DirectP2P: "unknown"}},
+		{"eim_eif", Verdict{Type: EndpointIndependentMapping, Filtering: FilteringEndpointIndependent}, Forecast{DirectP2P: "likely"}},
+		{"eim_untested", Verdict{Type: EndpointIndependentMapping, Filtering: FilteringUntested}, Forecast{DirectP2P: "likely"}},
+		{"eim_adf", Verdict{Type: EndpointIndependentMapping, Filtering: FilteringAddressDependent}, Forecast{DirectP2P: "possible"}},
+		{"eim_apdf", Verdict{Type: EndpointIndependentMapping, Filtering: FilteringAddressAndPortDependent}, Forecast{DirectP2P: "possible"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := decideForecast(tc.v)
+			if got != tc.want {
+				t.Errorf("decideForecast(%+v) = %+v, want %+v", tc.v, got, tc.want)
+			}
+		})
+	}
 }

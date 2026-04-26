@@ -25,9 +25,12 @@ const (
 	FormatJSON
 )
 
-// Render writes a Verdict + probe results to w in the requested format.
-// Writer and encoding errors are returned verbatim.
-func Render(w io.Writer, v classify.Verdict, probes []probe.Result, format Format) error {
+// Render writes a Verdict + probe results + optional filtering result to w
+// in the requested format. filtering may be nil; v.Filtering already encodes
+// the outcome via Classify, but callers (cli) can pass the original
+// FilteringResult through if needed for future renderers. Writer and
+// encoding errors are returned verbatim.
+func Render(w io.Writer, v classify.Verdict, probes []probe.Result, filtering *probe.FilteringResult, format Format) error {
 	switch format {
 	case FormatHuman:
 		return renderHuman(w, v, probes)

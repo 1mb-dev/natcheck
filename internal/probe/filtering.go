@@ -17,7 +17,11 @@ import (
 // filtering classification. Test1Other.IsValid() == false means the server
 // did not advertise OTHER-ADDRESS; in that case Test2Received and
 // Test3Received are both false and Err wraps ErrFilteringNotSupported.
+//
+// Server is the target of the §4.4 sequence (echoed from the ProbeFiltering
+// argument so consumers can attribute the result without re-threading state).
 type FilteringResult struct {
+	Server        Server
 	Test1Mapped   netip.AddrPort
 	Test1Other    netip.AddrPort
 	Test2Received bool
@@ -48,7 +52,7 @@ var errNoResponse = errors.New("no response within deadline")
 // per-test SetReadDeadline timers (timeout/2 each) drive the rest. Cancelling
 // ctx mid-call has no effect on in-flight reads.
 func ProbeFiltering(ctx context.Context, server Server, timeout time.Duration) FilteringResult {
-	res := FilteringResult{}
+	res := FilteringResult{Server: server}
 	if server.Host == "" || server.Port <= 0 || server.Port > 65535 {
 		res.Err = fmt.Errorf("invalid server %q:%d", server.Host, server.Port)
 		return res

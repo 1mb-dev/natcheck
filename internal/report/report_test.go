@@ -18,7 +18,7 @@ import (
 //   - adm_strict: 2/2 probes disagree (symmetric NAT; TURN required)
 //   - blocked: 2/2 probes failed (no network to outbound STUN)
 
-func fixtureEIMCone() (classify.Verdict, []probe.Result) {
+func fixtureEIMCone() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
@@ -31,10 +31,10 @@ func fixtureEIMCone() (classify.Verdict, []probe.Result) {
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes), probes
+	return classify.Classify(probes, nil), probes, nil
 }
 
-func fixtureADMStrict() (classify.Verdict, []probe.Result) {
+func fixtureADMStrict() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
@@ -47,10 +47,10 @@ func fixtureADMStrict() (classify.Verdict, []probe.Result) {
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes), probes
+	return classify.Classify(probes, nil), probes, nil
 }
 
-func fixtureBlocked() (classify.Verdict, []probe.Result) {
+func fixtureBlocked() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
@@ -61,7 +61,85 @@ func fixtureBlocked() (classify.Verdict, []probe.Result) {
 			Err:    errors.New("dial udp stun.cloudflare.com:3478: i/o timeout"),
 		},
 	}
-	return classify.Classify(probes), probes
+	return classify.Classify(probes, nil), probes, nil
+}
+
+// fixtureFilteringEIF: EIM mapping + endpoint-independent filtering.
+// Forecast: likely (no change vs untested).
+func fixtureFilteringEIF() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.example.org", Port: 3478},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
+			RTT:    18 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+	}
+	f := &probe.FilteringResult{
+		Server:        probe.Server{Host: "stun.example.org", Port: 3478},
+		Test1Mapped:   netip.MustParseAddrPort("203.0.113.45:51820"),
+		Test1Other:    netip.MustParseAddrPort("198.51.100.1:3479"),
+		Test2Received: true,
+		Test3Received: true,
+	}
+	return classify.Classify(probes, f), probes, f
+}
+
+// fixtureFilteringADF: EIM mapping + address-dependent filtering.
+// Forecast: possible (Test 2 dropped, Test 3 received).
+func fixtureFilteringADF() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.example.org", Port: 3478},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
+			RTT:    18 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+	}
+	f := &probe.FilteringResult{
+		Server:        probe.Server{Host: "stun.example.org", Port: 3478},
+		Test1Mapped:   netip.MustParseAddrPort("203.0.113.45:51820"),
+		Test1Other:    netip.MustParseAddrPort("198.51.100.1:3479"),
+		Test2Received: false,
+		Test3Received: true,
+	}
+	return classify.Classify(probes, f), probes, f
+}
+
+// fixtureFilteringAPDF: EIM mapping + address-and-port-dependent filtering.
+// Forecast: possible (both Test 2 and Test 3 dropped).
+func fixtureFilteringAPDF() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.example.org", Port: 3478},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
+			RTT:    18 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+	}
+	f := &probe.FilteringResult{
+		Server:        probe.Server{Host: "stun.example.org", Port: 3478},
+		Test1Mapped:   netip.MustParseAddrPort("203.0.113.45:51820"),
+		Test1Other:    netip.MustParseAddrPort("198.51.100.1:3479"),
+		Test2Received: false,
+		Test3Received: false,
+	}
+	return classify.Classify(probes, f), probes, f
 }
 
 // compareGolden loads want from path and diff-compares against got. Set
@@ -87,10 +165,10 @@ func compareGolden(t *testing.T, path string, got []byte) {
 	}
 }
 
-func renderToBytes(t *testing.T, v classify.Verdict, probes []probe.Result, f Format) []byte {
+func renderToBytes(t *testing.T, v classify.Verdict, probes []probe.Result, filtering *probe.FilteringResult, f Format) []byte {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := Render(&buf, v, probes, f); err != nil {
+	if err := Render(&buf, v, probes, filtering, f); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	return buf.Bytes()
@@ -99,29 +177,32 @@ func renderToBytes(t *testing.T, v classify.Verdict, probes []probe.Result, f Fo
 func TestRender_Golden(t *testing.T) {
 	cases := []struct {
 		name    string
-		fixture func() (classify.Verdict, []probe.Result)
+		fixture func() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 	}{
 		{"eim_cone", fixtureEIMCone},
 		{"adm_strict", fixtureADMStrict},
 		{"blocked", fixtureBlocked},
+		{"filtering_eif", fixtureFilteringEIF},
+		{"filtering_adf", fixtureFilteringADF},
+		{"filtering_apdf", fixtureFilteringAPDF},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v, probes := tc.fixture()
+			v, probes, filtering := tc.fixture()
 
-			human := renderToBytes(t, v, probes, FormatHuman)
+			human := renderToBytes(t, v, probes, filtering, FormatHuman)
 			compareGolden(t, filepath.Join("testdata", "human", tc.name+".golden"), human)
 
-			j := renderToBytes(t, v, probes, FormatJSON)
+			j := renderToBytes(t, v, probes, filtering, FormatJSON)
 			compareGolden(t, filepath.Join("testdata", "json", tc.name+".golden"), j)
 		})
 	}
 }
 
 func TestRender_UnknownFormat(t *testing.T) {
-	v, probes := fixtureEIMCone()
+	v, probes, filtering := fixtureEIMCone()
 	var buf bytes.Buffer
-	if err := Render(&buf, v, probes, Format(99)); err == nil {
+	if err := Render(&buf, v, probes, filtering, Format(99)); err == nil {
 		t.Fatal("expected error on unknown format, got nil")
 	}
 }
@@ -137,7 +218,7 @@ func TestRender_WarningsAlwaysArray(t *testing.T) {
 		// Warnings intentionally nil.
 	}
 	var buf bytes.Buffer
-	if err := Render(&buf, v, nil, FormatJSON); err != nil {
+	if err := Render(&buf, v, nil, nil, FormatJSON); err != nil {
 		t.Fatalf("Render: %v", err)
 	}
 	if !bytes.Contains(buf.Bytes(), []byte(`"warnings": []`)) {

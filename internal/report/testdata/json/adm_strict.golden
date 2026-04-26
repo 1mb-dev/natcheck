@@ -21,5 +21,8 @@
   "warnings": [
     "filtering_behavior_not_tested",
     "adm_or_stricter"
-  ]
+  ],
+  "filtering": {
+    "behavior": "untested"
+  }
 }

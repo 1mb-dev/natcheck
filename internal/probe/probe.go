@@ -16,9 +16,15 @@ type Server struct {
 
 // Result captures the outcome of a single probe. On success, Mapped and RTT
 // are set and Err is nil. On failure, Err is non-nil and Mapped/RTT are zero.
+//
+// Other carries the OTHER-ADDRESS attribute (RFC 5780 §7.4) when the server
+// advertised one. Zero-value (Other.IsValid() == false) means the server's
+// response did not include OTHER-ADDRESS, so it does not support the §4.4
+// filtering classification sequence.
 type Result struct {
 	Server Server
 	Mapped netip.AddrPort
+	Other  netip.AddrPort
 	RTT    time.Duration
 	Err    error
 }

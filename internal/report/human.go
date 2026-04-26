@@ -27,7 +27,9 @@ func natTypeHuman(v classify.Verdict) string {
 func warningText(id string) string {
 	switch id {
 	case classify.WarnFilteringBehaviorNotTested:
-		return "Filtering not tested (v0.1)."
+		return "Filtering not tested."
+	case classify.WarnFilteringSkippedNoChangeRequest:
+		return "Filtering skipped: server does not advertise OTHER-ADDRESS."
 	case classify.WarnCGNATDetected:
 		return "CGNAT detected (IP in 100.64.0.0/10)."
 	case classify.WarnADMOrStricter:
@@ -52,6 +54,14 @@ func renderHuman(w io.Writer, v classify.Verdict, probes []probe.Result) error {
 	fmt.Fprintf(&b, "NAT type: %s\n", natTypeHuman(v))
 	if v.PublicEndpoint.IsValid() {
 		fmt.Fprintf(&b, "Public endpoint: %s\n", v.PublicEndpoint)
+	}
+	if v.Filtering != classify.FilteringUntested {
+		if v.FilteringTestedAgainst.Host != "" {
+			fmt.Fprintf(&b, "Filtering: %s (tested against %s)\n",
+				v.Filtering, serverStr(v.FilteringTestedAgainst))
+		} else {
+			fmt.Fprintf(&b, "Filtering: %s\n", v.Filtering)
+		}
 	}
 
 	if len(probes) > 0 {

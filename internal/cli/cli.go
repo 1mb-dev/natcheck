@@ -31,13 +31,22 @@ var defaultServers = []probe.Server{
 	{Host: "stun.cloudflare.com", Port: 3478},
 }
 
+// FilteringFunc runs the RFC 5780 §4.4 filtering classification against a
+// single server. Default impl is probe.ProbeFiltering; tests inject stubs.
+type FilteringFunc func(ctx context.Context, s probe.Server, timeout time.Duration) probe.FilteringResult
+
+// filteringTimeoutCap bounds the wall-clock spent on the §4.4 sequence so
+// it doesn't extend mapping latency unbounded. ProbeFiltering subdivides
+// internally across Tests 1/2/3.
+const filteringTimeoutCap = 1500 * time.Millisecond
+
 // Run parses args, probes, classifies, renders, and returns an exit code.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
-	return runWith(ctx, args, out, errOut, probe.NewSTUN())
+	return runWith(ctx, args, out, errOut, probe.NewSTUN(), probe.ProbeFiltering)
 }
 
-// runWith is the testable core with an injectable Prober.
-func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober probe.Prober) int {
+// runWith is the testable core with injectable Prober and FilteringFunc.
+func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober probe.Prober, filterer FilteringFunc) int {
 	opts, err := parseFlags(args, errOut)
 	if err != nil {
 		// Usage already printed to errOut by flag.Parse.
@@ -62,13 +71,30 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober p
 		}
 	}
 
-	verdict := classify.Classify(results)
+	// Capability detection: pick the first server whose mapping probe observed
+	// OTHER-ADDRESS, then run ProbeFiltering against it. Default servers
+	// (Google/Cloudflare) don't advertise OTHER-ADDRESS, so filtering is
+	// skipped and adds zero latency for default-server users.
+	var filteringResult *probe.FilteringResult
+	for _, r := range results {
+		if r.Err == nil && r.Other.IsValid() {
+			budget := opts.timeout
+			if budget > filteringTimeoutCap {
+				budget = filteringTimeoutCap
+			}
+			res := filterer(ctx, r.Server, budget)
+			filteringResult = &res
+			break
+		}
+	}
+
+	verdict := classify.Classify(results, filteringResult)
 
 	format := report.FormatHuman
 	if opts.json {
 		format = report.FormatJSON
 	}
-	if err := report.Render(out, verdict, results, format); err != nil {
+	if err := report.Render(out, verdict, results, filteringResult, format); err != nil {
 		_, _ = fmt.Fprintf(errOut, "render: %v\n", err)
 		return 2
 	}
@@ -165,7 +191,7 @@ func parseFlags(args []string, errOut io.Writer) (*options, error) {
 	var servers serverList
 
 	fs.Var(&servers, "server", "STUN server `host:port` (repeatable; overrides defaults)")
-	fs.DurationVar(&opts.timeout, "timeout", 5*time.Second, "total probe `duration`")
+	fs.DurationVar(&opts.timeout, "timeout", 5*time.Second, "total mapping-probe `duration` (filtering classification adds up to 1.5s when applicable)")
 	fs.BoolVar(&opts.json, "json", false, "emit JSON instead of human-readable report")
 	fs.BoolVar(&opts.verbose, "verbose", false, "log each STUN transaction to stderr")
 	fs.BoolVar(&opts.showVersion, "version", false, "print version and exit")
