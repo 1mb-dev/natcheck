@@ -4,7 +4,7 @@ NAT type diagnosis CLI. One command tells you why your WebRTC, P2P, or VPN conne
 
 Built on [`pion/stun`](https://github.com/pion/stun). Pure Go, single static binary. No cgo, no services, no config.
 
-> v0.1.2. Spec: [`docs/design.md`](docs/design.md). Samples: [`docs/samples/`](docs/samples/).
+> v0.1.3. Spec: [`docs/design.md`](docs/design.md). Samples: [`docs/samples/`](docs/samples/).
 
 ## Why natcheck
 
