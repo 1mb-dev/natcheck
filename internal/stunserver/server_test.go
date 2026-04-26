@@ -301,6 +301,32 @@ func TestHandle_OtherAddressAbsent(t *testing.T) {
 	}
 }
 
+func TestHandle_SrcUnmapsToIPv4(t *testing.T) {
+	// IPv4-mapped IPv6 src must be encoded as IPv4 family in XOR-MAPPED-ADDRESS.
+	// Guards the src.Addr().Unmap() defensive call in Handle.
+	s := New(Options{})
+	req := mustEncodeBindingRequest(t)
+	mappedSrc := netip.AddrPortFrom(netip.MustParseAddr("::ffff:192.0.2.1"), 51234)
+
+	out := s.Handle(req.Raw, mappedSrc)
+	resp := &stun.Message{Raw: out}
+	if err := resp.Decode(); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var xor stun.XORMappedAddress
+	if err := xor.GetFrom(resp); err != nil {
+		t.Fatalf("XOR-MAPPED-ADDRESS missing: %v", err)
+	}
+	if len(xor.IP) != 4 {
+		t.Fatalf("XOR-MAPPED-ADDRESS IP length = %d, want 4 (IPv4 family)", len(xor.IP))
+	}
+	gotIP, _ := netip.AddrFromSlice(xor.IP)
+	wantIP := netip.MustParseAddr("192.0.2.1")
+	if gotIP.Unmap() != wantIP {
+		t.Fatalf("XOR-MAPPED-ADDRESS IP = %v, want %v", gotIP.Unmap(), wantIP)
+	}
+}
+
 func TestHandle_OtherAddressUnmaps(t *testing.T) {
 	// IPv4-mapped IPv6 address must be encoded as IPv4 family in OTHER-ADDRESS.
 	mapped := netip.AddrPortFrom(netip.MustParseAddr("::ffff:192.0.2.1"), 3479)
