@@ -14,8 +14,10 @@ Probes:
   stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
   stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
 
-Filtering not tested (v0.1).
+Filtering not tested.
 ```
+
+Pointing `--server` at a STUN server that advertises `OTHER-ADDRESS` adds a one-line `Filtering:` verdict per RFC 5780 §4.4. See [coturn setup](https://github.com/1mb-dev/natcheck/blob/main/docs/coturn-setup.md).
 
 Built on [`pion/stun`](https://github.com/pion/stun).
 

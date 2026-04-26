@@ -4,7 +4,7 @@ NAT type diagnosis CLI. One command tells you why your WebRTC, P2P, or VPN conne
 
 Built on [`pion/stun`](https://github.com/pion/stun). Pure Go, single static binary. No cgo, no services, no config.
 
-> Pre-release (v0.1). Spec: [`docs/design.md`](docs/design.md). Samples: [`docs/samples/`](docs/samples/).
+> v0.1.2. Spec: [`docs/design.md`](docs/design.md). Samples: [`docs/samples/`](docs/samples/).
 
 ## Why natcheck
 
@@ -44,10 +44,12 @@ Probes:
   stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
   stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
 
-Filtering not tested (v0.1).
+Filtering not tested.
 ```
 
 The `Direct P2P:` line leads so you get the answer on line 1.
+
+Pointing `--server` at a STUN server that advertises `OTHER-ADDRESS` (e.g. coturn — see [`docs/coturn-setup.md`](docs/coturn-setup.md)) adds a one-line `Filtering:` verdict per RFC 5780 §4.4. Default servers (Google, Cloudflare) don't, so filtering classification is skipped and adds zero latency for default-server users.
 
 ## Flags
 
@@ -80,11 +82,11 @@ if [ "$verdict" != "likely" ]; then
 fi
 ```
 
-The `--json` schema (`nat_type`, `public_endpoint`, `probes[]`, `webrtc_forecast`, `warnings[]`) is a public contract from v0.1 onward — additive changes only after release. Real captures live under [`docs/samples/`](docs/samples/).
+The `--json` schema (`nat_type`, `public_endpoint`, `probes[]`, `webrtc_forecast`, `warnings[]`, `filtering`) is a public contract from v0.1 onward — additive changes only after release. Real captures live under [`docs/samples/`](docs/samples/).
 
 ## Scope
 
-v0.1 classifies NAT mapping behavior (Endpoint-Independent, Address-Dependent, Address-and-Port-Dependent per RFC 5780) and reports a WebRTC direct-P2P forecast. Filtering behavior and hairpinning are out of scope. On CGNAT networks (`100.64.0.0/10`), the forecast is `unknown`. IPv6 works when the network supports it but is not exhaustively tested.
+natcheck classifies NAT mapping behavior (Endpoint-Independent, Address-Dependent, Address-and-Port-Dependent per RFC 5780) and reports a WebRTC direct-P2P forecast. Filtering behavior (RFC 5780 §4.4) is classified when the configured `--server` advertises `OTHER-ADDRESS`; otherwise the verdict is `untested`. Hairpinning detection is planned for v0.1.3. On CGNAT networks (`100.64.0.0/10`), the forecast is `unknown`. IPv6 works when the network supports it but is not exhaustively tested.
 
 See [`docs/design.md`](docs/design.md) for full architecture and testing details.
 

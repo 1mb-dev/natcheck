@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-04-26
+
 ### Added
 
 - RFC 5780 §4.4 filtering classification when the target STUN server advertises `OTHER-ADDRESS`. natcheck runs the three-step CHANGE-REQUEST sequence and reports `endpoint-independent`, `address-dependent`, `address-and-port-dependent`, or `untested` filtering.
@@ -62,6 +64,7 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
 
-[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2
 [0.1.1]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.1
 [0.1.0]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.0
