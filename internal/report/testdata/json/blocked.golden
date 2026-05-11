@@ -18,7 +18,8 @@
   },
   "warnings": [
     "filtering_behavior_not_tested",
-    "all_probes_failed"
+    "all_probes_failed",
+    "hairpin_untested"
   ],
   "filtering": {
     "behavior": "untested"

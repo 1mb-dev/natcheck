@@ -228,7 +228,7 @@ func TestClassify(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Classify(tc.results, tc.filtering)
+			got := Classify(tc.results, tc.filtering, nil)
 
 			if got.Type != tc.wantType {
 				t.Errorf("Type = %v, want %v", got.Type, tc.wantType)
@@ -272,10 +272,10 @@ func TestClassify(t *testing.T) {
 // TestClassify_NilSafe: the brain of the tool must not panic on degenerate
 // inputs. Callers may hand us nil or zero-value results in error paths.
 func TestClassify_NilSafe(t *testing.T) {
-	_ = Classify(nil, nil)
-	_ = Classify([]probe.Result{}, nil)
-	_ = Classify([]probe.Result{{}}, nil)         // zero-value result
-	_ = Classify([]probe.Result{{}, {}, {}}, nil) // multiple zero-value
+	_ = Classify(nil, nil, nil)
+	_ = Classify([]probe.Result{}, nil, nil)
+	_ = Classify([]probe.Result{{}}, nil, nil)         // zero-value result
+	_ = Classify([]probe.Result{{}, {}, {}}, nil, nil) // multiple zero-value
 }
 
 // TestNATType_String covers every branch.
@@ -412,7 +412,7 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Classify(eimProbes, tc.filtering)
+			got := Classify(eimProbes, tc.filtering, nil)
 			if got.Filtering != tc.wantBehavior {
 				t.Errorf("Filtering = %v, want %v", got.Filtering, tc.wantBehavior)
 			}
@@ -560,7 +560,7 @@ func TestClassify_MixedAddressFamily(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Classify(tc.results, nil)
+			got := Classify(tc.results, nil, nil)
 			if got.Type != tc.wantType {
 				t.Errorf("Type = %v, want %v", got.Type, tc.wantType)
 			}

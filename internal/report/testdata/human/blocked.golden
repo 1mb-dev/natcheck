@@ -7,3 +7,4 @@ Probes:
 
 Filtering not tested.
 All probes failed.
+Hairpinning not tested (local socket setup or STUN probe failed).

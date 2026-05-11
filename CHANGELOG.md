@@ -4,6 +4,26 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- RFC 5780 §4.3 hairpinning detection. New JSON field `"hairpinning": true | false | null` (additive); `null` distinguishes "not tested" from "tested false." Probe uses two dedicated unconnected UDP sockets, STUN-probed in parallel against the first `--server` entry, then a tagged loopback packet from socket A to mapped-B. Listen window default 1s. Wall-clock parallel cost ≤200ms in the common case; runs concurrent with mapping probes.
+- New warning constant `hairpin_untested` emitted when local socket setup or STUN probe failed (hairpinning was attempted but no observation was possible).
+- Human-format report adds a `Hairpinning: true|false` line when the probe produced a value; the JSON field carries the same information for tooling.
+
+### Fixed
+
+- `report/human.go::warningText` no longer falls through to the raw warning ID for `mixed_address_family_probes` (#19). The friendly text reads "Mapping classification spans IPv4 and IPv6; each family observes its own NAT." per the issue's prescribed wording.
+- `WarnInsufficientProbes` text refined to "Insufficient probes for one or more address families." Under v0.1.3 combine semantics the warning can fire alongside a confident combined verdict; the old "Insufficient probes to determine mapping behavior." implied no verdict was reached.
+
+### Changed
+
+- `classify.Classify` signature gains a third parameter `*probe.HairpinningResult`. Callers passing nil get the same behavior as v0.1.3 plus the new `hairpin_untested` warning.
+- `docs/design.md` v0.2 staged-sequence labels reconciled: hairpinning is v0.1.4 (was labeled v0.1.3 in section headers), `natcheck server` is v0.1.5 (was v0.1.4). The hairpinning cost claim updated to reflect actual ≤200ms parallel cost (was "no wall-clock cost in common case").
+
+### Migration note
+
+JSON consumers reading `warnings[]` will see a new `hairpin_untested` value whenever a build-time/test path bypasses the hairpin probe (e.g., older `--server` configurations on a network where socket setup fails). Consumers reading `hairpinning` must handle `null` as "did not test." Additive only; no removals.
+
 ## [0.1.3] — 2026-04-26
 
 ### Fixed

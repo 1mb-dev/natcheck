@@ -412,10 +412,10 @@ If the server doesn't advertise `OTHER-ADDRESS`, all filtering tests skip; `Warn
 
 ## Hairpinning detection (v0.1.4)
 
-Two local UDP sockets, parallel with mapping probes:
+Two local UDP sockets, parallel with mapping probes (≤200ms parallel cost in the common case — two extra STUN round-trips executed concurrently with the mapping probes; bounded by `hairpinTimeoutCap` in `internal/cli`):
 
 1. Allocate sockets A and B.
-2. STUN-probe each (concurrent with the existing `--server` probes, no extra round-trip cost) to obtain mapped endpoints `mA`, `mB`.
+2. STUN-probe each in parallel against the first `--server` entry to obtain mapped endpoints `mA`, `mB`.
 3. From A, send a uniquely-tagged UDP packet to `mB`.
 4. Listen on B for `T_hairpin` (default 1s).
 

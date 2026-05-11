@@ -19,11 +19,10 @@
     "turn_required": false
   },
   "warnings": [
-    "filtering_behavior_not_tested",
-    "hairpin_untested"
+    "filtering_behavior_not_tested"
   ],
   "filtering": {
     "behavior": "untested"
   },
-  "hairpinning": null
+  "hairpinning": false
 }

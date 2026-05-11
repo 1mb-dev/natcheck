@@ -20,7 +20,8 @@
   },
   "warnings": [
     "filtering_behavior_not_tested",
-    "adm_or_stricter"
+    "adm_or_stricter",
+    "hairpin_untested"
   ],
   "filtering": {
     "behavior": "untested"

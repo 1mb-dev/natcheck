@@ -44,6 +44,8 @@ func warningText(id string) string {
 		return "Insufficient probes for one or more address families."
 	case classify.WarnMixedAddressFamilyProbes:
 		return "Mapping classification spans IPv4 and IPv6; each family observes its own NAT."
+	case classify.WarnHairpinUntested:
+		return "Hairpinning not tested (local socket setup or STUN probe failed)."
 	default:
 		return id
 	}
@@ -68,6 +70,9 @@ func renderHuman(w io.Writer, v classify.Verdict, probes []probe.Result) error {
 		} else {
 			fmt.Fprintf(&b, "Filtering: %s\n", v.Filtering)
 		}
+	}
+	if v.Hairpinning != nil {
+		fmt.Fprintf(&b, "Hairpinning: %t\n", *v.Hairpinning)
 	}
 
 	if len(probes) > 0 {

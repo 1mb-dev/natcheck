@@ -18,7 +18,9 @@
     "direct_p2p": "likely",
     "turn_required": false
   },
-  "warnings": [],
+  "warnings": [
+    "hairpin_untested"
+  ],
   "filtering": {
     "behavior": "endpoint-independent",
     "tested_against": "stun.example.org:3478"

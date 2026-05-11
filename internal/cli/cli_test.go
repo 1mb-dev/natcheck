@@ -64,10 +64,17 @@ func noFilterer(_ context.Context, s probe.Server, _ time.Duration) probe.Filter
 	return probe.FilteringResult{Server: s, Err: probe.ErrFilteringNotSupported}
 }
 
+// noHairpiner returns a HairpinningResult with a setup error. Used when a
+// test doesn't care about hairpinning — the classifier surfaces this as
+// WarnHairpinUntested and hairpinning stays null in JSON.
+func noHairpiner(_ context.Context, s probe.Server, _ time.Duration) probe.HairpinningResult {
+	return probe.HairpinningResult{Server: s, Err: errors.New("hairpin disabled in test")}
+}
+
 func run(t *testing.T, prober probe.Prober, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code := runWith(context.Background(), args, &out, &errOut, prober, noFilterer)
+	code := runWith(context.Background(), args, &out, &errOut, prober, noFilterer, noHairpiner)
 	return code, out.String(), errOut.String()
 }
 
@@ -283,7 +290,7 @@ func TestRun_FilteringPicksFirstCapableServer(t *testing.T) {
 		"--server", serverKey(srv0),
 		"--server", serverKey(srv1),
 		"--server", serverKey(srv2),
-	}, &out, &errOut, fp, filterer)
+	}, &out, &errOut, fp, filterer, noHairpiner)
 	if code != 0 {
 		t.Errorf("code = %d, want 0", code)
 	}
@@ -304,7 +311,7 @@ func TestRun_FilteringSkippedWhenNoCapableServer(t *testing.T) {
 		return probe.FilteringResult{}
 	}
 	var out, errOut bytes.Buffer
-	code := runWith(context.Background(), nil, &out, &errOut, fp, filterer)
+	code := runWith(context.Background(), nil, &out, &errOut, fp, filterer, noHairpiner)
 	if code != 0 {
 		t.Errorf("code = %d, want 0", code)
 	}
