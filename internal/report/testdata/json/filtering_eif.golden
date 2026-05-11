@@ -22,5 +22,6 @@
   "filtering": {
     "behavior": "endpoint-independent",
     "tested_against": "stun.example.org:3478"
-  }
+  },
+  "hairpinning": null
 }
