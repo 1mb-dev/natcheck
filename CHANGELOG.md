@@ -4,6 +4,8 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-05-11
+
 ### Added
 
 - RFC 5780 §4.3 hairpinning detection. New JSON field `"hairpinning": true | false | null` (additive); `null` distinguishes "not tested" from "tested false." Probe uses two dedicated unconnected UDP sockets, STUN-probed in parallel against the first `--server` entry, then a tagged loopback packet from socket A to mapped-B. Listen window default 1s. Wall-clock parallel cost ≤200ms in the common case; runs concurrent with mapping probes.
@@ -123,7 +125,8 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
 
-[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.4
 [0.1.3]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.3
 [0.1.2.2]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2.2
 [0.1.2.1]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2.1
