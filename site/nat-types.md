@@ -95,9 +95,14 @@ Filtering classification (RFC 5780 §4.4) activates automatically when `--server
 
 On CGNAT, natcheck reports `unknown` rather than guessing. Behind a CGNAT carrier (T-Mobile US, Jio, Starlink, others)? Help calibrate the verdict — see [issue #6](https://github.com/1mb-dev/natcheck/issues/6).
 
+## Hairpinning (v0.1.4)
+
+Some NATs forward packets sent to your own public mapped endpoint back to another host behind the same NAT — a "hairpin." Useful for two peers on the same LAN finding each other through their shared public IP. natcheck detects this by allocating two local UDP sockets, learning each one's public-mapped endpoint via STUN, and sending a tagged packet from socket A to socket B's mapped endpoint. If B receives it, hairpinning is `true`; if not, `false`. If local socket setup or the STUN probe fails, the result is `null` and `hairpin_untested` appears in `warnings[]`.
+
+The result is informational in v0.1.4 — it doesn't shift the WebRTC forecast, since hairpinning matters for same-NAT (LAN) peers but most direct-P2P WebRTC traffic is inter-NAT.
+
 ## Not covered
 
-- **Hairpinning** — NAT forwarding packets back to another host behind itself.
 - **UPnP / NAT-PMP / PCP** — the app requests a mapping instead of inferring one via STUN.
 - **ICE** — the algorithm WebRTC runs to try multiple candidate paths.
 - **QUIC / WebTransport** — newer transports with different NAT traversal characteristics.
