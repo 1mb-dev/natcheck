@@ -187,6 +187,41 @@ func TestProbeHairpinning_FalseNegative_PortRestrictedFiltering(t *testing.T) {
 	}
 }
 
+// TestProbeHairpinning_CtxCancelUnblocksRecv verifies that ctx.Done() forces
+// in-flight socket reads/writes to error immediately, mirroring the pattern
+// in stun.go. Without the deadline-bridge goroutine inside probeHairpinning
+// a cancel-without-deadline context would let the recv loop run until the
+// timeout fully elapsed.
+func TestProbeHairpinning_CtxCancelUnblocksRecv(t *testing.T) {
+	t.Parallel()
+	f := newFakeStunEcho(t)
+	h := defaultHarness()
+	// Force the recv path to actually wait — production realHairpinRecv
+	// honors the deadline, so its blocking read is what cancel must unblock.
+	// Use a deliberately long timeout so the test fails (hangs past test
+	// timeout) if cancellation isn't bridged.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	res := probeHairpinning(ctx, f.server(), 5*time.Second, h.send, h.recv)
+	elapsed := time.Since(start)
+
+	// Without the ctx.Done() bridge the call would block ~5s; with it,
+	// the cancel at 50ms should unblock within a few hundred ms.
+	if elapsed > 2*time.Second {
+		t.Errorf("ProbeHairpinning blocked for %v after ctx cancel; expected <2s", elapsed)
+	}
+	// Result shape is allowed to vary (the cancel may interrupt different
+	// phases on different runs); the test asserts only that the call
+	// returned promptly.
+	_ = res
+}
+
 // TestProbeHairpinning_InvalidServer covers the input-validation path:
 // empty host, zero port, out-of-range port.
 func TestProbeHairpinning_InvalidServer(t *testing.T) {

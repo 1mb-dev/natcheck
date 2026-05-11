@@ -98,6 +98,22 @@ func probeHairpinning(ctx context.Context, server Server, timeout time.Duration,
 	}
 	defer func() { _ = connB.Close() }()
 
+	// Bridge ctx.Done() to both sockets' deadlines so a cancel-without-
+	// deadline context unblocks in-flight reads/writes promptly (mirrors
+	// the pattern in stun.go:43-55). The deferred close(done) fires before
+	// the conn.Close() defers (LIFO), so the goroutine exits cleanly on
+	// the success path.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = connA.SetDeadline(time.Unix(1, 0))
+			_ = connB.SetDeadline(time.Unix(1, 0))
+		case <-done:
+		}
+	}()
+
 	perProbe := timeout / 2
 	if perProbe <= 0 || perProbe > 500*time.Millisecond {
 		perProbe = 500 * time.Millisecond
