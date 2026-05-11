@@ -1,0 +1,36 @@
+{
+  "nat_type": "ADM",
+  "nat_type_legacy": "symmetric",
+  "public_endpoint": "[2001:db8::1]:51585",
+  "probes": [
+    {
+      "server": "stun.l.google.com:19302",
+      "rtt_ms": 31,
+      "mapped": "[2001:db8::1]:51585"
+    },
+    {
+      "server": "stun.cloudflare.com:3478",
+      "rtt_ms": 9,
+      "mapped": "[2001:db8::1]:50846"
+    },
+    {
+      "server": "198.51.100.99:3478",
+      "rtt_ms": 61,
+      "mapped": "203.0.113.45:7783"
+    }
+  ],
+  "webrtc_forecast": {
+    "direct_p2p": "unlikely",
+    "turn_required": true
+  },
+  "warnings": [
+    "mixed_address_family_probes",
+    "insufficient_probes",
+    "adm_or_stricter"
+  ],
+  "filtering": {
+    "behavior": "address-and-port-dependent",
+    "tested_against": "198.51.100.99:3478"
+  },
+  "hairpinning": true
+}

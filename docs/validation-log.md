@@ -82,3 +82,34 @@ Same droplet as v0.1.2.2 (DO basic droplet, coturn 4.6.1, primary public IPv4 + 
 ### Sequence shift
 
 `docs/design.md` v0.2 staged-sequence updated: v0.1.3 = #14 fix (this release); hairpinning shifted to v0.1.4; `natcheck server` shifted to v0.1.5; v0.2.0 line unchanged.
+
+---
+
+## v0.1.4 — 2026-05-11
+
+### Setup
+
+Fresh DigitalOcean basic droplet (Ubuntu 24.04, named `natcheck-coturn-validate-02`), coturn from apt, primary public IPv4 + DO Reserved IP aliased to `eth0` via [`scripts/validate-coturn.sh`](../scripts/validate-coturn.sh) with `SECOND_IP` set. Provisioner exited clean ("OK — no 'RFC5780 disabled' or 'STUN CHANGE_REQUEST not supported' in log"). Same client as v0.1.3 (residential ISP, dual-stack, IPv6 ADM behavior unchanged). Local natcheck built from the v0.1.4 merge commit (`36a687f`) with `-ldflags '-X main.version=v0.1.4-rc.validation+36a687f'`.
+
+### Verified
+
+- Hairpinning probe end-to-end: `ProbeHairpinning` runs in parallel with mapping probes against the first `--server` entry, returns `Detected = &true` on this network (tagged 16-byte nonce successfully looped back from socket A to socket B's mapped endpoint). JSON `hairpinning: true` populated; human format renders `Hairpinning: true` line. Across three back-to-back runs the value was stable (no flapping under healthy-network conditions).
+- `WarnHairpinUntested` correctly absent from `warnings[]` when the probe produced a value; CHANGELOG migration note covers the inverse case for legacy consumers.
+- Issue #19 polish present: `Mapping classification spans IPv4 and IPv6; each family observes its own NAT.` (the prescribed text from the issue body) renders for `mixed_address_family_probes`; `Insufficient probes for one or more address families.` (refined text) renders for `insufficient_probes`. No bare warning IDs in human output.
+- design.md drift fixes present: section headers at `:413` (Hairpinning, v0.1.4) and `:430` (`natcheck server`, v0.1.5) consistent with the staged-sequence table at `:336`; `docs/design.md:50` reflects v0.1.3+ `possible` emission.
+- Wall-clock budget: three runs with `--timeout 10s` completed in ~3-4s actual (the timeout cap is upper-bound; hairpinning + mapping ran concurrent). One earlier run with `--timeout 5s` saw filtering and hairpinning time out on a slow network condition — the tri-state contract held (`filtering: untested`, `hairpinning: null`, `hairpin_untested` warning emitted). Honest degradation.
+- Exit code 1 (forecast `unlikely` from ADM) — exit-code contract preserved; no shift from hairpinning value per the v0.1.4 design (forecast logic unchanged).
+- Tag versioning: forthcoming `v0.1.4` will be 3-segment semver, per the lesson from v0.1.2.1 / v0.1.2.2.
+
+### Reference output
+
+[`docs/samples/hairpinning.txt`](samples/hairpinning.txt) / [`.json`](samples/hairpinning.json) — captured against this droplet with `--server stun.l.google.com:19302 --server stun.cloudflare.com:3478 --server <coturn-ipv4>:3478 --timeout 10s`. Public IPs redacted (client v6 → 2001:db8::1, client v4-via-coturn → 203.0.113.45, droplet → 198.51.100.99); external server IPs (Google, Cloudflare) and ports / RTTs kept as observed. JSON and txt captures from sequential runs of the same configuration — per-run port variance is expected (ADM means each server sees a different port).
+
+### Findings filed
+
+- #24 — `probe/hairpin.go` address-family selection branch (v4 vs v6 socket binding) has no explicit unit test; covered indirectly via the IPv4 happy-path test. Open, v0.1.4-or-later polish; not release-gating.
+
+### Notes
+
+- Network observation: the residential ISP's IPv6 path showed ADM (symmetric NAT) behavior — Google and Cloudflare via IPv6 saw the client at different mapped ports. Same client network as v0.1.3 observation; the per-family verdict pattern is consistent.
+- Hairpinning result on this network was `true`. ADM mapping combined with successful hairpinning is somewhat unusual but not contradictory: the NAT applies port-restricted-but-not-address-restricted filtering on the loopback path, which permits the tagged packet's return. Real-world per-NAT variance.

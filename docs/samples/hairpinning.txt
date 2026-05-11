@@ -1,0 +1,14 @@
+Direct P2P: unlikely
+NAT type: Address-Dependent Mapping (symmetric)
+Public endpoint: [2001:db8::1]:59697
+Filtering: address-and-port-dependent (tested against 198.51.100.99:3478)
+Hairpinning: true
+
+Probes:
+  stun.l.google.com:19302   rtt=33ms  mapped=[2001:db8::1]:59697
+  stun.cloudflare.com:3478  rtt=11ms  mapped=[2001:db8::1]:62416
+  198.51.100.99:3478        rtt=61ms  mapped=203.0.113.45:26623
+
+Mapping classification spans IPv4 and IPv6; each family observes its own NAT.
+Insufficient probes for one or more address families.
+Classification is ADM or stricter.
