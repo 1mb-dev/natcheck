@@ -47,7 +47,7 @@ In:
 - `--server host:port` flag, repeatable, to add or override servers
 - `--timeout duration` flag (default 5s)
 - `--version`, `--help`
-- WebRTC forecast: `likely | possible | unlikely | unknown` (v0.1 emits `likely`, `unlikely`, `unknown`; `possible` is reserved for v0.2 filtering and CGNAT calibration)
+- WebRTC forecast: `likely | possible | unlikely | unknown` (v0.1.3+ emits `possible` for EIM × Address-Dependent Filtering combinations; CGNAT calibration further refines `possible` / `unlikely` once per-carrier samples land)
 - CGNAT heuristic warning (if mapped IP is in 100.64.0.0/10)
 - Exit codes: 0 (P2P-friendly), 1 (P2P-hostile), 2 (probe error)
 
@@ -384,7 +384,7 @@ Verbose output emits coded warning constants in `warnings[]`:
 
 No free-text warning strings.
 
-### Server side (v0.1.4)
+### Server side (v0.1.5)
 
 ```
 natcheck server [--listen :3478] [--alt :3479] [--external-ip <addr>]
@@ -410,7 +410,7 @@ Outcome mapping:
 
 If the server doesn't advertise `OTHER-ADDRESS`, all filtering tests skip; `WarnFilteringSkippedNoChangeRequest` is emitted; `filtering.behavior = "untested"`.
 
-## Hairpinning detection (v0.1.3)
+## Hairpinning detection (v0.1.4)
 
 Two local UDP sockets, parallel with mapping probes:
 
@@ -427,7 +427,7 @@ Result:
 
 Documented limitation: false-negative possible if the NAT applies port-restricted filtering on the hairpin path. Test case in `internal/probe/hairpin_test.go` simulates this scenario via the existing fake-responder pattern.
 
-## `natcheck server` subcommand (v0.1.4)
+## `natcheck server` subcommand (v0.1.5)
 
 Stateless RFC 5780 §3 STUN responder.
 
