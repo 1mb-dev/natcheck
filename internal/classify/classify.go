@@ -114,8 +114,19 @@ type Verdict struct {
 	//   - the initial Test 1 binding probe failed (ErrTest1Failed);
 	//   - the (T2=true, T3=false) RFC-impossible state was observed.
 	FilteringTestedAgainst probe.Server
-	Warnings               []string
-	Forecast               Forecast
+	// Hairpinning is tri-state per docs/design.md:361:
+	//   - nil:    not tested (probe didn't run / socket setup failed)
+	//   - &true:  tagged loopback packet arrived
+	//   - &false: listen window elapsed without the packet (may be a true
+	//             negative OR a per-NAT filtering false-negative on the
+	//             hairpin path; see docs/design.md:428)
+	// Carried through Classify unchanged in v0.1.4; forecast logic does NOT
+	// shift on this value yet. Hairpinning only matters for same-NAT (LAN)
+	// peers, while the natcheck user's question is about inter-NAT WebRTC.
+	// Future releases may revisit if real-world data justifies a shift.
+	Hairpinning *bool
+	Warnings    []string
+	Forecast    Forecast
 }
 
 // Stable warning vocabulary for the JSON API.
@@ -127,6 +138,7 @@ const (
 	WarnFilteringBehaviorNotTested      = "filtering_behavior_not_tested"
 	WarnFilteringSkippedNoChangeRequest = "filtering_skipped_no_change_request"
 	WarnMixedAddressFamilyProbes        = "mixed_address_family_probes"
+	WarnHairpinUntested                 = "hairpin_untested"
 )
 
 // cgnatPrefix is RFC 6598 shared address space.
@@ -143,11 +155,31 @@ var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 // the existing WarnFilteringBehaviorNotTested warning is emitted. When
 // filtering is non-nil, its Test2/Test3 booleans drive the FilteringBehavior
 // and the WebRTC forecast for EIM mappings (RFC 5780 §4.4 outcomes).
-func Classify(results []probe.Result, filtering *probe.FilteringResult) Verdict {
+//
+// hairpinning may be nil; in that case Verdict.Hairpinning stays nil and
+// WarnHairpinUntested is emitted. When hairpinning is non-nil, the value is
+// carried through to Verdict.Hairpinning unchanged. v0.1.4 does NOT shift
+// the forecast based on this value — hairpinning only matters for same-NAT
+// (LAN) peers, which is not the natcheck user's question. See the Verdict
+// field doc and docs/design.md:478.
+func Classify(results []probe.Result, filtering *probe.FilteringResult, hairpinning *probe.HairpinningResult) Verdict {
 	v := classifyMapping(results)
 	applyFiltering(&v, filtering)
+	applyHairpinning(&v, hairpinning)
 	v.Forecast = decideForecast(v)
 	return v
+}
+
+// applyHairpinning folds the hairpin probe outcome into the verdict. When
+// hairpinning is nil OR ran but produced no Detected value, emit
+// WarnHairpinUntested. When Detected is populated, copy it across.
+func applyHairpinning(v *Verdict, hairpinning *probe.HairpinningResult) {
+	if hairpinning == nil || hairpinning.Detected == nil {
+		v.Warnings = appendUnique(v.Warnings, WarnHairpinUntested)
+		return
+	}
+	d := *hairpinning.Detected
+	v.Hairpinning = &d
 }
 
 // classifyMapping derives mapping behavior, public endpoint, CGNAT, and the

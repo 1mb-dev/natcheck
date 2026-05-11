@@ -35,18 +35,30 @@ var defaultServers = []probe.Server{
 // single server. Default impl is probe.ProbeFiltering; tests inject stubs.
 type FilteringFunc func(ctx context.Context, s probe.Server, timeout time.Duration) probe.FilteringResult
 
+// HairpinFunc runs the RFC 5780 §4.3 hairpinning detection against a single
+// server. Default impl is probe.ProbeHairpinning; tests inject stubs.
+type HairpinFunc func(ctx context.Context, s probe.Server, timeout time.Duration) probe.HairpinningResult
+
 // filteringTimeoutCap bounds the wall-clock spent on the §4.4 sequence so
 // it doesn't extend mapping latency unbounded. ProbeFiltering subdivides
 // internally across Tests 1/2/3.
 const filteringTimeoutCap = 1500 * time.Millisecond
 
+// hairpinTimeoutCap bounds the listen-window for the hairpin tagged-packet
+// reception. Total wall-clock for ProbeHairpinning is up to ~1.5× this cap
+// (STUN probes + listen); per docs/design.md, hairpinning runs parallel
+// with mapping probes, so this is bounded against the outer timeout, not
+// added to it.
+const hairpinTimeoutCap = 1 * time.Second
+
 // Run parses args, probes, classifies, renders, and returns an exit code.
 func Run(ctx context.Context, args []string, out, errOut io.Writer) int {
-	return runWith(ctx, args, out, errOut, probe.NewSTUN(), probe.ProbeFiltering)
+	return runWith(ctx, args, out, errOut, probe.NewSTUN(), probe.ProbeFiltering, probe.ProbeHairpinning)
 }
 
-// runWith is the testable core with injectable Prober and FilteringFunc.
-func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober probe.Prober, filterer FilteringFunc) int {
+// runWith is the testable core with injectable Prober, FilteringFunc, and
+// HairpinFunc.
+func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober probe.Prober, filterer FilteringFunc, hairpiner HairpinFunc) int {
 	opts, err := parseFlags(args, errOut)
 	if err != nil {
 		// Usage already printed to errOut by flag.Parse.
@@ -62,6 +74,24 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober p
 
 	probeCtx, cancel := context.WithTimeout(ctx, opts.timeout)
 	defer cancel()
+
+	// Hairpinning runs in parallel with mapping probes against the first
+	// --server entry. Hairpinning needs no specific server capability beyond
+	// XOR-MAPPED-ADDRESS (every STUN server returns that), so capability
+	// detection isn't required here. The result is collected after probeAll
+	// returns; in the common case hairpinning completes within the mapping
+	// probe wall-clock and adds no measurable latency.
+	var hairpinCh chan probe.HairpinningResult
+	if len(opts.servers) > 0 && hairpiner != nil {
+		budget := opts.timeout
+		if budget > hairpinTimeoutCap {
+			budget = hairpinTimeoutCap
+		}
+		hairpinCh = make(chan probe.HairpinningResult, 1)
+		go func(s probe.Server, t time.Duration) {
+			hairpinCh <- hairpiner(probeCtx, s, t)
+		}(opts.servers[0], budget)
+	}
 
 	results := probeAll(probeCtx, prober, opts.servers)
 
@@ -88,7 +118,13 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober p
 		}
 	}
 
-	verdict := classify.Classify(results, filteringResult)
+	var hairpinningResult *probe.HairpinningResult
+	if hairpinCh != nil {
+		h := <-hairpinCh
+		hairpinningResult = &h
+	}
+
+	verdict := classify.Classify(results, filteringResult, hairpinningResult)
 
 	format := report.FormatHuman
 	if opts.json {

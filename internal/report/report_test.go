@@ -31,7 +31,7 @@ func fixtureEIMCone() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil), probes, nil
+	return classify.Classify(probes, nil, nil), probes, nil
 }
 
 func fixtureADMStrict() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -47,7 +47,7 @@ func fixtureADMStrict() (classify.Verdict, []probe.Result, *probe.FilteringResul
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil), probes, nil
+	return classify.Classify(probes, nil, nil), probes, nil
 }
 
 func fixtureBlocked() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -61,7 +61,7 @@ func fixtureBlocked() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 			Err:    errors.New("dial udp stun.cloudflare.com:3478: i/o timeout"),
 		},
 	}
-	return classify.Classify(probes, nil), probes, nil
+	return classify.Classify(probes, nil, nil), probes, nil
 }
 
 // fixtureFilteringEIF: EIM mapping + endpoint-independent filtering.
@@ -87,7 +87,7 @@ func fixtureFilteringEIF() (classify.Verdict, []probe.Result, *probe.FilteringRe
 		Test2Received: true,
 		Test3Received: true,
 	}
-	return classify.Classify(probes, f), probes, f
+	return classify.Classify(probes, f, nil), probes, f
 }
 
 // fixtureFilteringADF: EIM mapping + address-dependent filtering.
@@ -113,7 +113,73 @@ func fixtureFilteringADF() (classify.Verdict, []probe.Result, *probe.FilteringRe
 		Test2Received: false,
 		Test3Received: true,
 	}
-	return classify.Classify(probes, f), probes, f
+	return classify.Classify(probes, f, nil), probes, f
+}
+
+// hairpinTrue / hairpinFalse return *bool for fixture construction —
+// Verdict.Hairpinning is tri-state and the test goldens need both populated
+// values.
+func hairpinTrue() *bool  { v := true; return &v }
+func hairpinFalse() *bool { v := false; return &v }
+
+// fixtureHairpinningDetected: EIM mapping + hairpinning observed. v0.1.4
+// does not shift forecast on hairpinning, so the verdict still reads
+// `likely` from EIM alone — the new line is purely informational.
+func fixtureHairpinningDetected() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    31 * time.Millisecond,
+		},
+	}
+	h := &probe.HairpinningResult{Server: probes[0].Server, Detected: hairpinTrue()}
+	return classify.Classify(probes, nil, h), probes, nil
+}
+
+// fixtureHairpinningNotDetected: EIM mapping + hairpinning probed but did
+// not loop back (genuine negative OR per-NAT filtering false-negative per
+// docs/design.md:428).
+func fixtureHairpinningNotDetected() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    31 * time.Millisecond,
+		},
+	}
+	h := &probe.HairpinningResult{Server: probes[0].Server, Detected: hairpinFalse()}
+	return classify.Classify(probes, nil, h), probes, nil
+}
+
+// fixtureHairpinningUntested: hairpin probe attempted but socket setup or
+// STUN failed; classifier emits WarnHairpinUntested and JSON hairpinning
+// stays null. Exercises the warning-text render path for the new constant.
+func fixtureHairpinningUntested() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    31 * time.Millisecond,
+		},
+	}
+	h := &probe.HairpinningResult{Server: probes[0].Server, Err: errors.New("simulated socket setup failure")}
+	return classify.Classify(probes, nil, h), probes, nil
 }
 
 // fixtureInsufficientProbes: a single successful probe. Combined verdict is
@@ -129,7 +195,7 @@ func fixtureInsufficientProbes() (classify.Verdict, []probe.Result, *probe.Filte
 			RTT:    24 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil), probes, nil
+	return classify.Classify(probes, nil, nil), probes, nil
 }
 
 // fixtureMixedV4V6Disagree: IPv4 group agrees on EIM, IPv6 group disagrees
@@ -159,7 +225,7 @@ func fixtureMixedV4V6Disagree() (classify.Verdict, []probe.Result, *probe.Filter
 			RTT:    47 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil), probes, nil
+	return classify.Classify(probes, nil, nil), probes, nil
 }
 
 // fixtureFilteringAPDF: EIM mapping + address-and-port-dependent filtering.
@@ -185,7 +251,7 @@ func fixtureFilteringAPDF() (classify.Verdict, []probe.Result, *probe.FilteringR
 		Test2Received: false,
 		Test3Received: false,
 	}
-	return classify.Classify(probes, f), probes, f
+	return classify.Classify(probes, f, nil), probes, f
 }
 
 // compareGolden loads want from path and diff-compares against got. Set
@@ -233,6 +299,9 @@ func TestRender_Golden(t *testing.T) {
 		{"filtering_apdf", fixtureFilteringAPDF},
 		{"mixed_v4v6_disagree", fixtureMixedV4V6Disagree},
 		{"insufficient_probes", fixtureInsufficientProbes},
+		{"hairpinning_detected", fixtureHairpinningDetected},
+		{"hairpinning_not_detected", fixtureHairpinningNotDetected},
+		{"hairpinning_untested", fixtureHairpinningUntested},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

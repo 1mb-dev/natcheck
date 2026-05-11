@@ -30,7 +30,8 @@
   },
   "warnings": [
     "filtering_behavior_not_tested",
-    "mixed_address_family_probes"
+    "mixed_address_family_probes",
+    "hairpin_untested"
   ],
   "filtering": {
     "behavior": "untested"

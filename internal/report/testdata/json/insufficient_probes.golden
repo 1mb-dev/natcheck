@@ -15,7 +15,8 @@
   },
   "warnings": [
     "filtering_behavior_not_tested",
-    "insufficient_probes"
+    "insufficient_probes",
+    "hairpin_untested"
   ],
   "filtering": {
     "behavior": "untested"

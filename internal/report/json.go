@@ -78,6 +78,10 @@ func renderJSON(w io.Writer, v classify.Verdict, probes []probe.Result) error {
 	if v.Filtering != classify.FilteringUntested && v.FilteringTestedAgainst.Host != "" {
 		r.Filtering.TestedAgainst = serverStr(v.FilteringTestedAgainst)
 	}
+	if v.Hairpinning != nil {
+		h := *v.Hairpinning
+		r.Hairpinning = &h
+	}
 	// Ensure arrays marshal as [] rather than null.
 	if r.Warnings == nil {
 		r.Warnings = []string{}

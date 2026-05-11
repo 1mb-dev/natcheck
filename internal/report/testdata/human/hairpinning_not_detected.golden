@@ -1,10 +1,10 @@
 Direct P2P: likely
 NAT type: Endpoint-Independent Mapping (cone)
 Public endpoint: 203.0.113.45:51820
+Hairpinning: false
 
 Probes:
   stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
   stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
 
 Filtering not tested.
-Hairpinning not tested (local socket setup or STUN probe failed).

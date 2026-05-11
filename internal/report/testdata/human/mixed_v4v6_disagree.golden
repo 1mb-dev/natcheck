@@ -10,3 +10,4 @@ Probes:
 
 Filtering not tested.
 Mapping classification spans IPv4 and IPv6; each family observes its own NAT.
+Hairpinning not tested (local socket setup or STUN probe failed).

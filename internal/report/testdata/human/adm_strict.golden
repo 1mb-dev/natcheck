@@ -8,3 +8,4 @@ Probes:
 
 Filtering not tested.
 Classification is ADM or stricter.
+Hairpinning not tested (local socket setup or STUN probe failed).

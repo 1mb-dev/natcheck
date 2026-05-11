@@ -18,7 +18,9 @@
     "direct_p2p": "possible",
     "turn_required": false
   },
-  "warnings": [],
+  "warnings": [
+    "hairpin_untested"
+  ],
   "filtering": {
     "behavior": "address-and-port-dependent",
     "tested_against": "stun.example.org:3478"
