@@ -43,7 +43,7 @@ func warningText(id string) string {
 		// the text must not imply the verdict itself is unknown.
 		return "Insufficient probes for one or more address families."
 	case classify.WarnMixedAddressFamilyProbes:
-		return "IPv4 and IPv6 probes both present; verdict reflects per-family agreement."
+		return "Verdict combines independent IPv4 and IPv6 classifications."
 	default:
 		return id
 	}

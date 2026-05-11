@@ -9,4 +9,4 @@ Probes:
   stun6.cloudflare.com:3478  rtt=47ms  mapped=[2001:db8::2]:51821
 
 Filtering not tested.
-IPv4 and IPv6 probes both present; verdict reflects per-family agreement.
+Verdict combines independent IPv4 and IPv6 classifications.
