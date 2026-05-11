@@ -22,5 +22,6 @@
   "filtering": {
     "behavior": "address-dependent",
     "tested_against": "stun.example.org:3478"
-  }
+  },
+  "hairpinning": null
 }

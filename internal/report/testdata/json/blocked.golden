@@ -22,5 +22,6 @@
   ],
   "filtering": {
     "behavior": "untested"
-  }
+  },
+  "hairpinning": null
 }
