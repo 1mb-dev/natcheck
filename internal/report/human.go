@@ -37,7 +37,13 @@ func warningText(id string) string {
 	case classify.WarnAllProbesFailed:
 		return "All probes failed."
 	case classify.WarnInsufficientProbes:
-		return "Insufficient probes to determine mapping behavior."
+		// Fires whenever any per-family group has fewer than two probes.
+		// Under v0.1.3 combine semantics this can co-occur with a confident
+		// combined verdict (when the other family had two probes that agreed);
+		// the text must not imply the verdict itself is unknown.
+		return "Insufficient probes for one or more address families."
+	case classify.WarnMixedAddressFamilyProbes:
+		return "IPv4 and IPv6 probes both present; verdict reflects per-family agreement."
 	default:
 		return id
 	}

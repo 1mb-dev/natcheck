@@ -116,6 +116,52 @@ func fixtureFilteringADF() (classify.Verdict, []probe.Result, *probe.FilteringRe
 	return classify.Classify(probes, f), probes, f
 }
 
+// fixtureInsufficientProbes: a single successful probe. Combined verdict is
+// Unknown but the warning text must signal "partial information," not
+// "verdict impossible" — under v0.1.3 combine semantics, the warning fires
+// whenever any per-family group has fewer than two probes, which can include
+// cases where the other family produced a confident verdict.
+func fixtureInsufficientProbes() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+	}
+	return classify.Classify(probes, nil), probes, nil
+}
+
+// fixtureMixedV4V6Disagree: IPv4 group agrees on EIM, IPv6 group disagrees
+// (looks like ADM). Combined verdict is Unknown. Exercises the render path
+// for WarnMixedAddressFamilyProbes — the v0.1.3 cross-address-family
+// classifier fix had no render regression guard before this fixture.
+func fixtureMixedV4V6Disagree() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    31 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun6.l.google.com", Port: 19302},
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    42 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun6.cloudflare.com", Port: 3478},
+			Mapped: netip.MustParseAddrPort("[2001:db8::2]:51821"),
+			RTT:    47 * time.Millisecond,
+		},
+	}
+	return classify.Classify(probes, nil), probes, nil
+}
+
 // fixtureFilteringAPDF: EIM mapping + address-and-port-dependent filtering.
 // Forecast: possible (both Test 2 and Test 3 dropped).
 func fixtureFilteringAPDF() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -185,6 +231,8 @@ func TestRender_Golden(t *testing.T) {
 		{"filtering_eif", fixtureFilteringEIF},
 		{"filtering_adf", fixtureFilteringADF},
 		{"filtering_apdf", fixtureFilteringAPDF},
+		{"mixed_v4v6_disagree", fixtureMixedV4V6Disagree},
+		{"insufficient_probes", fixtureInsufficientProbes},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
