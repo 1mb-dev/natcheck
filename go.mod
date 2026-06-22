@@ -2,7 +2,7 @@ module github.com/1mb-dev/natcheck
 
 go 1.25
 
-require github.com/pion/stun/v3 v3.1.5
+require github.com/pion/stun/v3 v3.1.6
 
 require (
 	github.com/pion/dtls/v3 v3.1.4 // indirect
