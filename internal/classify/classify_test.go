@@ -713,3 +713,28 @@ func TestClassify_ServerDiversity(t *testing.T) {
 		})
 	}
 }
+
+func TestClassify_IPv4UntestedWarning(t *testing.T) {
+	v4 := func(host string) probe.Result { return ok(host, 3478, "203.0.113.45:51820", time.Millisecond) }
+	v6 := func(host string) probe.Result { return ok(host, 3478, "[2001:db8::1]:51820", time.Millisecond) }
+
+	cases := []struct {
+		name    string
+		results []probe.Result
+		want    bool
+	}{
+		{"IPv6 only", []probe.Result{v6("a"), v6("b")}, true},
+		{"IPv6 answered, IPv4 server failed", []probe.Result{v6("a"), v6("b"), fail("c", 3478)}, true},
+		{"IPv4 only", []probe.Result{v4("a"), v4("b")}, false},
+		{"both families", []probe.Result{v4("a"), v6("b")}, false},
+		{"nothing answered", []probe.Result{fail("a", 3478), fail("b", 3478)}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Classify(tc.results, nil, nil)
+			if got := slices.Contains(v.Warnings, WarnIPv4Untested); got != tc.want {
+				t.Errorf("warning present = %v, want %v; warnings=%v", got, tc.want, v.Warnings)
+			}
+		})
+	}
+}

@@ -140,6 +140,7 @@ const (
 	WarnMixedAddressFamilyProbes        = "mixed_address_family_probes"
 	WarnHairpinUntested                 = "hairpin_untested"
 	WarnInsufficientServerDiversity     = "insufficient_server_diversity"
+	WarnIPv4Untested                    = "ipv4_untested"
 )
 
 // cgnatPrefix is RFC 6598 shared address space.
@@ -244,6 +245,12 @@ func classifyMapping(results []probe.Result) Verdict {
 	//   - WarnMixedAddressFamilyProbes fires whenever both families are present.
 	if multiFamily {
 		v.Warnings = appendUnique(v.Warnings, WarnMixedAddressFamilyProbes)
+	}
+	// A hostname is probed on one family, and DNS prefers IPv6, so an IPv6
+	// verdict can sit in front of a symmetric IPv4 NAT with nothing in the
+	// output to say so.
+	if len(v4) == 0 {
+		v.Warnings = appendUnique(v.Warnings, WarnIPv4Untested)
 	}
 	for _, g := range []*Verdict{v4g, v6g} {
 		if g == nil {

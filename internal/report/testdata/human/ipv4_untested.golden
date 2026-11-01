@@ -1,0 +1,11 @@
+Direct P2P: possible
+NAT type: Endpoint-Independent Mapping (cone)
+Public endpoint: [2001:db8::1]:51820
+
+Probes:
+  stun.l.google.com:19302   rtt=24ms  mapped=[2001:db8::1]:51820
+  stun.cloudflare.com:3478  rtt=31ms  mapped=[2001:db8::1]:51820
+
+Filtering not tested.
+IPv4 not tested; this verdict covers IPv6 only.
+Hairpinning not tested (local socket setup or STUN probe failed).
