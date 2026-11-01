@@ -142,7 +142,7 @@ func changeRequestIgnored(target, other netip.AddrPort, t2, t3 *bindingResult) b
 	if t2 == nil || t2.source.Addr() != source.Addr() {
 		return false
 	}
-	return !(source.Addr().IsLoopback() && t2.source == advertised)
+	return !source.Addr().IsLoopback() || t2.source != advertised
 }
 
 type changeRequestPayload struct {
