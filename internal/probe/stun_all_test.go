@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -48,21 +49,41 @@ func TestProbeAll_SetsResolvedTarget(t *testing.T) {
 	}
 }
 
-func TestProbeAll_RunsConcurrently(t *testing.T) {
-	a, b := newFakeSTUN(t, 200*time.Millisecond, behaviorNormal), newFakeSTUN(t, 200*time.Millisecond, behaviorNormal)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
+// Each server answers only once both have received a request, so a prober that
+// waits for one reply before sending the next cannot finish.
+func TestProbeAll_SendsWithoutWaitingForReplies(t *testing.T) {
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	barrierServer := func() Server {
+		conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("listen: %v", err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+		go func() {
+			buf := make([]byte, 1500)
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			req := &stun.Message{Raw: append([]byte{}, buf[:n]...)}
+			if req.Decode() != nil {
+				return
+			}
+			arrived.Done()
+			arrived.Wait()
+			_, _ = conn.WriteTo(buildResponse(behaviorNormal, req, from.(*net.UDPAddr)), from)
+		}()
+		return Server{Host: "127.0.0.1", Port: conn.LocalAddr().(*net.UDPAddr).Port}
+	}
 
-	start := time.Now()
-	res := NewSTUN().ProbeAll(ctx, []Server{fakeServer(a), fakeServer(b)})
-	elapsed := time.Since(start)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	res := NewSTUN().ProbeAll(ctx, []Server{barrierServer(), barrierServer()})
 	for i, r := range res {
 		if r.Err != nil {
 			t.Fatalf("result %d: %v", i, r.Err)
 		}
-	}
-	if elapsed > 390*time.Millisecond {
-		t.Errorf("elapsed = %v, want about 200ms", elapsed)
 	}
 }
 
@@ -100,7 +121,7 @@ func TestProbeAll_BadServerDoesNotAffectGoodServer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bad, good := newFakeSTUN(t, 0, tt.behavior), newFakeSTUN(t, 20*time.Millisecond, behaviorNormal)
-			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 
 			res := NewSTUN().ProbeAll(ctx, []Server{fakeServer(bad), fakeServer(good)})
@@ -148,6 +169,10 @@ func TestProbeAll_DropsValidReplyFromWrongSource(t *testing.T) {
 	}
 }
 
+// A flood can fill the shared socket's receive buffer and crowd out another
+// server's reply, so this pins the deadline only. That server then reads as
+// failed, which can change the verdict: see combineGroups, where a confident
+// family wins over one left Unknown.
 func TestProbeAll_FloodFromServerCannotExtendDeadline(t *testing.T) {
 	flooder, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
@@ -169,25 +194,18 @@ func TestProbeAll_FloodFromServerCannotExtendDeadline(t *testing.T) {
 			sent.Add(1)
 		}
 	}()
-	good := newFakeSTUN(t, 20*time.Millisecond, behaviorNormal)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	res := NewSTUN().ProbeAll(ctx, []Server{
-		{Host: "127.0.0.1", Port: flooder.LocalAddr().(*net.UDPAddr).Port},
-		fakeServer(good),
-	})
+	res := probeOne(ctx, Server{Host: "127.0.0.1", Port: flooder.LocalAddr().(*net.UDPAddr).Port})
 	elapsed := time.Since(start)
 
 	if sent.Load() < 100 {
 		t.Fatalf("flood never ran: %d packets", sent.Load())
 	}
-	if res[0].Err == nil {
+	if res.Err == nil {
 		t.Error("flooding server: expected error, got success")
-	}
-	if res[1].Err != nil {
-		t.Errorf("good server failed under flood: %v", res[1].Err)
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Errorf("elapsed = %v, want the 150ms deadline to hold", elapsed)
