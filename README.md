@@ -4,7 +4,7 @@ NAT type diagnosis CLI. One command tells you why your WebRTC, P2P, or VPN conne
 
 Built on [`pion/stun`](https://github.com/pion/stun). Pure Go, single static binary. No cgo, no services, no config.
 
-> v0.1.3. Spec: [`docs/design.md`](docs/design.md). Samples: [`docs/samples/`](docs/samples/).
+> Spec: [`docs/design.md`](docs/design.md). Samples: [`docs/samples/`](docs/samples/).
 
 ## Why natcheck
 
@@ -33,12 +33,13 @@ Then run:
 natcheck
 ```
 
-Example output on a healthy home network:
+Example output with the default servers:
 
 ```
-Direct P2P: likely
+Direct P2P: possible
 NAT type: Endpoint-Independent Mapping (cone)
 Public endpoint: 203.0.113.45:51820
+Hairpinning: false
 
 Probes:
   stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
@@ -47,7 +48,7 @@ Probes:
 Filtering not tested.
 ```
 
-The `Direct P2P:` line leads so you get the answer on line 1.
+The `Direct P2P:` line leads so you get the answer on line 1. `likely` needs a server that can measure filtering, which the default servers cannot, so `possible` is the most they report.
 
 Pointing `--server` at a STUN server that advertises `OTHER-ADDRESS` (e.g. coturn — see [`docs/coturn-setup.md`](docs/coturn-setup.md)) adds a one-line `Filtering:` verdict per RFC 5780 §4.4. Default servers (Google, Cloudflare) don't, so filtering classification is skipped and adds zero latency for default-server users.
 
@@ -75,18 +76,17 @@ Scripts that ask "did the tool run?" check `$? -ne 2`. Scripts that ask "can I u
 ## CI usage
 
 ```bash
-verdict=$(natcheck --json | jq -r '.webrtc_forecast.direct_p2p')
-if [ "$verdict" != "likely" ]; then
-  echo "NAT not P2P-friendly: $verdict"
+if ! natcheck --json > natcheck.json; then
+  echo "NAT not P2P-friendly: $(jq -r '.webrtc_forecast.direct_p2p' natcheck.json)"
   exit 1
 fi
 ```
 
-The `--json` schema (`nat_type`, `public_endpoint`, `probes[]`, `webrtc_forecast`, `warnings[]`, `filtering`) is a public contract from v0.1 onward — additive changes only after release. Real captures live under [`docs/samples/`](docs/samples/).
+The `--json` schema (`nat_type`, `public_endpoint`, `probes[]`, `webrtc_forecast`, `warnings[]`, `filtering`, `hairpinning`) is a public contract from v0.1 onward — additive changes only after release. Real captures live under [`docs/samples/`](docs/samples/).
 
 ## Scope
 
-natcheck classifies NAT mapping behavior (Endpoint-Independent, Address-Dependent, Address-and-Port-Dependent per RFC 5780) and reports a WebRTC direct-P2P forecast. Filtering behavior (RFC 5780 §4.4) is classified when the configured `--server` advertises `OTHER-ADDRESS`; otherwise the verdict is `untested`. Hairpinning is out of scope. On CGNAT networks (`100.64.0.0/10`), the forecast is `unknown`. IPv6 works when the network supports it but is not exhaustively tested.
+natcheck classifies NAT mapping behavior (Endpoint-Independent, Address-Dependent, Address-and-Port-Dependent per RFC 5780) and reports a WebRTC direct-P2P forecast. Filtering behavior (RFC 5780 §4.4) is classified when the configured `--server` advertises `OTHER-ADDRESS`; otherwise the verdict is `untested`. Hairpinning is reported when the probe can run. On CGNAT networks (`100.64.0.0/10`), the forecast is `unknown`. IPv6 works when the network supports it but is not exhaustively tested. A dual-stack host probes one family per hostname, so the verdict covers the family it reached; pass A-record addresses to `--server` to check IPv4.
 
 See [`docs/design.md`](docs/design.md) for full architecture and testing details.
 

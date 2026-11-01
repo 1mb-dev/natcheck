@@ -4,12 +4,15 @@ Real `natcheck` runs captured across networks. Any address that could identify a
 
 ## Captured
 
+Each sample states what it proves. Lab samples are real coturn and real Linux netfilter NAT on local Docker networks, not a consumer router.
+
 | File | Network | Servers | Outcome |
 |------|---------|---------|---------|
-| [`dev-machine-default.txt`](dev-machine-default.txt) / [`.json`](dev-machine-default.json) | Residential dual-stack (IPv4 + IPv6) | default (Google + Cloudflare) | IPv6 preferred by DNS; Google IPv6 responds; Cloudflare IPv6 times out → 1/2 probes → `Unknown` verdict, exit 1 |
-| [`dev-machine-ipv4.txt`](dev-machine-ipv4.txt) / [`.json`](dev-machine-ipv4.json) | Same network, IPv4-forced via A-record `--server` | Google `74.125.250.129:19302`, Cloudflare `162.159.207.0:3478` | Google IPv4 responds; Cloudflare IPv4 also times out → same `Unknown` verdict |
-| [`filtering.txt`](filtering.txt) / [`.json`](filtering.json) | Same network + custom coturn (DO droplet, multi-IP form per `docs/coturn-setup.md`) | Google + Cloudflare hostname defaults + coturn IPv4 literal | Google + Cloudflare resolve IPv6 (2 probes, ADM internally); coturn via IPv4 (singleton). Per-family combine: v6 confident ADM + v4 Unknown → combined ADM. Filtering: APDF (tested against coturn). `mixed_address_family_probes` warning fires. Captured against natcheck v0.1.3. |
-| [`hairpinning.txt`](hairpinning.txt) / [`.json`](hairpinning.json) | Same network + custom coturn | Google + Cloudflare + coturn IPv4 literal, `--timeout 10s` | Same per-family combine as v0.1.3 sample; adds v0.1.4 schema fields: `hairpinning: true` (NAT permits the tagged loopback), filtering: APDF (tested against coturn). Human format renders refined warning text from #19. Captured against natcheck v0.1.4. |
+| [`ipv6-native.txt`](ipv6-native.txt) / [`.json`](ipv6-native.json) | Residential dual-stack, native IPv6 | default (Google + Cloudflare) | `possible`, equal mapped ports, `ipv4_untested`. Shows the false symmetric is gone; no NAT is involved, so it does not show cone detection |
+| [`ipv4-symmetric.txt`](ipv4-symmetric.txt) / [`.json`](ipv4-symmetric.json) | Same network, IPv4 via A-record `--server` | Google `74.125.250.129:19302`, Cloudflare `162.159.207.0:3478` | ADM, `unlikely`, differing ports. This network's IPv4 NAT is genuinely symmetric |
+| [`filtering.txt`](filtering.txt) / [`.json`](filtering.json) | Lab, client behind `MASQUERADE` | coturn on two IPs | EIM with address-and-port-dependent filtering, `possible` |
+| [`symmetric.txt`](symmetric.txt) / [`.json`](symmetric.json) | Lab, client behind `MASQUERADE --random-fully` | coturn on two IPs | ADM, `unlikely`, differing ports |
+| [`hairpinning.txt`](hairpinning.txt) / [`.json`](hairpinning.json) | Lab, no NAT | coturn on two IPs | EIM, endpoint-independent filtering, hairpinning true, `likely` |
 
 ## Contributing
 

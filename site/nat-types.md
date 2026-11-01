@@ -15,8 +15,8 @@ When the same laptop sends to two different servers from the same local port, th
 
 | RFC 5780 | Legacy | Behaviour |
 |---|---|---|
-| **Endpoint-Independent Mapping** (EIM) | Full Cone | Same public `IP:port` for any destination. |
-| **Address-Dependent Mapping** (ADM) | Restricted Cone | Same port per destination IP; new port per new IP. |
+| **Endpoint-Independent Mapping** (EIM) | Cone (full, restricted or port-restricted) | Same public `IP:port` for any destination. |
+| **Address-Dependent Mapping** (ADM) | Symmetric | Same port per destination IP; new port per new IP. |
 | **Address-and-Port-Dependent Mapping** (APDM) | Symmetric | New public port per destination `IP:port`. |
 
 Hole-punching needs the remote peer to predict your public port. APDM defeats that: the port a STUN server reports is not the port your NAT uses when you later contact your peer. ICE cannot hole-punch through APDM — it falls back to relaying via TURN.
@@ -40,8 +40,7 @@ Mapping on both sides is the dominant factor:
 - **EIM × EIM:** works reliably.
 - **EIM × ADM:** usually works. The EIM side has a predictable endpoint; the ADM side initiates and the EIM learns its source.
 - **EIM × APDM:** marginal. Works when the APDM side initiates and the EIM responds to the observed source port; ICE candidate gathering alone is not enough.
-- **ADM × ADM:** often works with a reasonable ICE implementation.
-- **APDM × ADM or APDM × APDM:** fails. TURN relay required.
+- **Neither side EIM:** assume TURN.
 
 ## CGNAT is a second NAT in front of yours
 
@@ -80,9 +79,10 @@ natcheck
 ```
 
 ```
-Direct P2P: likely
+Direct P2P: possible
 NAT type: Endpoint-Independent Mapping (cone)
 Public endpoint: 203.0.113.45:51820
+Hairpinning: false
 
 Probes:
   stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
@@ -95,11 +95,11 @@ Filtering classification (RFC 5780 §4.4) activates automatically when `--server
 
 On CGNAT, natcheck reports `unknown` rather than guessing. Behind a CGNAT carrier (T-Mobile US, Jio, Starlink, others)? Help calibrate the verdict — see [issue #6](https://github.com/1mb-dev/natcheck/issues/6).
 
-## Hairpinning (v0.1.4)
+## Hairpinning
 
 Some NATs forward packets sent to your own public mapped endpoint back to another host behind the same NAT — a "hairpin." Useful for two peers on the same LAN finding each other through their shared public IP. natcheck detects this by allocating two local UDP sockets, learning each one's public-mapped endpoint via STUN, and sending a tagged packet from socket A to socket B's mapped endpoint. If B receives it, hairpinning is `true`; if not, `false`. If local socket setup or the STUN probe fails, the result is `null` and `hairpin_untested` appears in `warnings[]`.
 
-The result is informational in v0.1.4 — it doesn't shift the WebRTC forecast, since hairpinning matters for same-NAT (LAN) peers but most direct-P2P WebRTC traffic is inter-NAT.
+The result is informational — it doesn't shift the WebRTC forecast, since hairpinning matters for same-NAT (LAN) peers but most direct-P2P WebRTC traffic is inter-NAT.
 
 ## Not covered
 

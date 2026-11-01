@@ -4,6 +4,43 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-11-01
+
+Corrects the mapping verdict. Upgrade and rerun.
+
+### Read this first
+
+- **Earlier symmetric verdicts were unreliable; rerun.** natcheck opened one socket per server, so it compared two local ports rather than one NAT mapping. Networks with no NAT or a cone NAT read as `Address-Dependent Mapping (symmetric)`, `unlikely`, exit 1. Reported and diagnosed in #28 by @dotfrankruan.
+- **CI gates may flip from 1 to 0.** Scripts that gate on natcheck will start passing on networks that were wrongly failing, with filtering usually unmeasured. The JSON schema is unchanged apart from two new warning values.
+- **The verdict describes this network, not your peers.** A connection also depends on the other side. Keep TURN as a fallback.
+- **`likely` now means filtering was measured.** The default servers cannot measure filtering, so a cone NAT on default servers reads `possible`. `possible` and `likely` both exit 0, so script on the exit code, not the word.
+- **A dual-stack host probes one family per hostname.** natcheck can report `possible`, exit 0, over IPv6 while the same host's IPv4 is symmetric, so a peer reachable only over IPv4 could still fail. The new `ipv4_untested` warning says when this applies. To check IPv4, pass A-record addresses to `--server`.
+- **A lost family does not lower the verdict.** A server that floods or goes silent can cost another server's reply. A family left with too little data reads `Unknown`, and a confident result from the other family then wins, so IPv4 ADM plus IPv6 EIM can read `possible`, exit 0. Losing every reply reads `Blocked`, exit 2.
+
+### Fixed
+
+- Probes in one address family now share one local socket, as the mapping test requires (#28). Replies are matched by source and transaction ID, and anything else is dropped.
+- A server that ignored or rejected CHANGE-REQUEST could read as a measured filtering result. Those cases now report filtering untested.
+
+### Added
+
+- Warning `ipv4_untested`: no IPv4 probe answered, so the verdict covers IPv6 only.
+- Warning `insufficient_server_diversity`: mappings that agree across fewer than two server IPs cannot show endpoint-independent mapping, so they read `Unknown`, exit 1. Use `--server` values on two different IPs.
+- Mapping probes retransmit at 0.5, 1.5 and 3.5s under the same `--timeout`, so one lost packet no longer costs the verdict. Hairpinning stays single-shot.
+
+### Changed
+
+- EIM with filtering untested now forecasts `possible`, not `likely`. It read stronger than measured strict filtering, so the same router improved by being measured less. `likely` requires measured endpoint-independent filtering.
+- A closed `--server` port now costs the full `--timeout`, because an unconnected socket gets no refusal. The error reads `no response from <address>`.
+- `rtt` counts from the first send, so a retransmitted probe reports its full wait.
+- Go 1.26 is the minimum version.
+- `pion/stun` 3.1.7.
+- CI runs daily and on demand, and requires a `CI Result` check.
+
+### Validation
+
+Checked on a real dual-stack network and in a local Docker lab with coturn on two IPs behind Linux netfilter NAT. No consumer router has been tested. See [`docs/validation-log.md`](docs/validation-log.md).
+
 ## [0.1.4] — 2026-05-11
 
 ### Added
@@ -125,7 +162,8 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
 
-[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.5
 [0.1.4]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.4
 [0.1.3]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.3
 [0.1.2.2]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.2.2

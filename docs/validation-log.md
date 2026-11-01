@@ -113,3 +113,48 @@ Fresh DigitalOcean basic droplet (Ubuntu 24.04, named `natcheck-coturn-validate-
 
 - Network observation: the residential ISP's IPv6 path showed ADM (symmetric NAT) behavior — Google and Cloudflare via IPv6 saw the client at different mapped ports. Same client network as v0.1.3 observation; the per-family verdict pattern is consistent.
 - Hairpinning result on this network was `true`. ADM mapping combined with successful hairpinning is somewhat unusual but not contradictory: the NAT applies port-restricted-but-not-address-restricted filtering on the loopback path, which permits the tagged packet's return. Real-world per-NAT variance.
+
+---
+
+## v0.1.5 — 2026-11-01
+
+### Setup
+
+Local Docker lab in place of a cloud droplet, by owner decision: coturn 4.10.0 on two IPs, a Linux router container running netfilter NAT, a client behind it and a client beside it, all on internal Docker networks. Plus a real residential dual-stack network. All runs on the code tagged `v0.1.5`.
+
+### Verified
+
+| Run | Result | Proves |
+|---|---|---|
+| Lab, no NAT, RFC 5780 coturn, 3 runs | EIM, endpoint-independent filtering, hairpinning true, `likely`, exit 0 | A real coturn passes the new source checks; replies from alternate addresses are accepted. This is the only `likely` here, because only this run measured permissive filtering |
+| Lab, `MASQUERADE`, 3 runs | EIM, address-and-port-dependent filtering, `possible`, exit 0 | Cone detection through real netfilter NAT: the mapped IP differs from the client's. A lone client, so no port collision was forced |
+| Lab, `SNAT` to a port range, 3 runs | EIM, `possible`, exit 0 | As above, through an explicit SNAT rule |
+| Lab, `MASQUERADE --random-fully`, 3 runs | ADM, `unlikely`, exit 1, differing ports | Real symmetric control: the fix does not paint everything cone |
+| Lab, coturn without RFC 5780, 9 runs | Same mapping verdicts, `possible` or `unlikely`, filtering untested | Mapping does not depend on RFC 5780 support |
+| Real network, native IPv6, default servers, 3 runs | EIM, `possible`, exit 0, equal mapped ports, `ipv4_untested` | The false symmetric is gone on this network. Does not show cone detection, since no NAT is involved |
+| Real network, IPv4, A-record `--server` values, 3 runs | ADM, `unlikely`, exit 1, both probes answered, differing ports | This network's IPv4 NAT is genuinely symmetric |
+
+Real-socket tests with simulated no-NAT, cone and symmetric mapping run in CI. They failed on the unfixed code for no NAT and cone and passed for symmetric, then passed on the fix.
+
+The curation harness, which runs both servers on one loopback IP, prints `Unknown`, exit 1, for `direct` and `eim`, and symmetric for `apdm`. That is the server-diversity guard working: one IP cannot separate EIM from ADM. Before the guard merged it printed cone for `direct` and `eim`.
+
+### Not proven
+
+- No consumer router has been tested. The lab is real Linux NAT on a lab topology.
+- No public-internet coturn run for this release. `scripts/validate-coturn.sh`, a provider topology such as a Reserved IP, and apt's coturn 4.6 have not been exercised since v0.1.4. If one of them reads differently, filtering should fall back to untested with mapping unaffected; that has not been observed.
+
+### Correction to earlier entries
+
+The v0.1.4 note that this network's IPv6 path "showed ADM (symmetric NAT) behavior" was wrong, and the same applies to the IPv6 ADM results from earlier entries. Those ports differed because natcheck used two local sockets (#28). The fixed build reads the same IPv6 path as EIM with equal ports.
+
+### Reference output
+
+[`docs/samples/ipv6-native.txt`](samples/ipv6-native.txt), [`ipv4-symmetric.txt`](samples/ipv4-symmetric.txt), [`filtering.txt`](samples/filtering.txt), [`hairpinning.txt`](samples/hairpinning.txt), [`symmetric.txt`](samples/symmetric.txt), each with a `.json` pair.
+
+### Findings filed
+
+Filed at release: no-NAT verdict, exit-2 report printing `unlikely`, ADM and APDM not distinguished, one family probed per hostname, filtering Tests 2 and 3 one-shot, filtering and hairpinning re-resolving the server, garbled replies reported as no response.
+
+### Notes
+
+- In the lab's coturn-without-RFC-5780 runs, some said `Filtering skipped` and others `Filtering not tested`. Both mean untested and the verdicts were correct. Cause not established.

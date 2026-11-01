@@ -85,4 +85,3 @@ Run from at least three different client networks (home, mobile hotspot, café W
 ## What's NOT covered
 
 - **Production hardening** — auth (`lt-cred-mech`), TLS (`tls-listening-port`, `cert`/`pkey`), rate limiting, persistence, metrics. coturn's own README covers these. natcheck doesn't and shouldn't.
-- **Bundled `natcheck server` subcommand** — planned for v0.1.4 (see `docs/design.md` v0.2 addendum). Until then, coturn is the path.
