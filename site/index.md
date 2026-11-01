@@ -25,8 +25,7 @@ Built on [`pion/stun`](https://github.com/pion/stun).
 ## Install
 
 ```bash
-brew tap 1mb-dev/tap
-brew install natcheck
+brew install 1mb-dev/tap/natcheck
 ```
 
 or, on any platform with Go 1.26+:
