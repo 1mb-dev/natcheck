@@ -190,7 +190,7 @@ func fixtureHairpinningDetected() (classify.Verdict, []probe.Result, *probe.Filt
 
 // fixtureHairpinningNotDetected: EIM mapping + hairpinning probed but did
 // not loop back (genuine negative OR per-NAT filtering false-negative per
-// docs/design.md:428).
+// docs/design.md).
 func fixtureHairpinningNotDetected() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 	probes := []probe.Result{
 		{

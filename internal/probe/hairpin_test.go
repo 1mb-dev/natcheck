@@ -154,7 +154,7 @@ func TestProbeHairpinning_STUNFailure(t *testing.T) {
 }
 
 // TestProbeHairpinning_FalseNegative_PortRestrictedFiltering simulates the
-// case docs/design.md:428 names as required: the STUN probes succeed (mA, mB
+// case docs/design.md names as required: the STUN probes succeed (mA, mB
 // are known) but the NAT applies port-restricted filtering on the hairpin
 // path — the tagged packet is dropped because B didn't initiate to A's mapped
 // endpoint. The probe must return &false cleanly, no error.

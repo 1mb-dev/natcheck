@@ -44,7 +44,7 @@ type HairpinningResult struct {
 // Wall-clock budget: STUN phase (parallel) caps at min(timeout/2, 500ms);
 // listen phase consumes up to `timeout`. Total ≤ 1.5 × timeout in the worst
 // case. The caller orchestrates this in parallel with mapping probes; the
-// non-functional target at docs/design.md:303 (<2s cold-start) is preserved
+// non-functional target at docs/design.md (<2s cold-start) is preserved
 // for timeout ≤ 1s.
 func ProbeHairpinning(ctx context.Context, server Server, timeout time.Duration) HairpinningResult {
 	return probeHairpinning(ctx, server, timeout, realHairpinSend, realHairpinRecv)
@@ -54,7 +54,7 @@ func ProbeHairpinning(ctx context.Context, server Server, timeout time.Duration)
 // tests can inject behavior that simulates a per-NAT filtering rule without
 // requiring a real NAT in the localhost test environment. Production wires
 // realHairpinSend / realHairpinRecv (real socket I/O). The spec at
-// docs/design.md:428 names the port-restricted-filtering false-negative as a
+// docs/design.md names the port-restricted-filtering false-negative as a
 // required test case; this seam is how that test is expressed.
 type hairpinSender func(ctx context.Context, from net.PacketConn, to netip.AddrPort, tag []byte) error
 type hairpinReceiver func(ctx context.Context, on net.PacketConn, tag []byte, timeout time.Duration) (bool, error)

@@ -114,12 +114,12 @@ type Verdict struct {
 	//   - the initial Test 1 binding probe failed (ErrTest1Failed);
 	//   - the (T2=true, T3=false) RFC-impossible state was observed.
 	FilteringTestedAgainst probe.Server
-	// Hairpinning is tri-state per docs/design.md:361:
+	// Hairpinning is tri-state per docs/design.md:
 	//   - nil:    not tested (probe didn't run / socket setup failed)
 	//   - &true:  tagged loopback packet arrived
 	//   - &false: listen window elapsed without the packet (may be a true
 	//             negative OR a per-NAT filtering false-negative on the
-	//             hairpin path; see docs/design.md:428)
+	//             hairpin path; see docs/design.md)
 	// Carried through Classify unchanged in v0.1.4; forecast logic does NOT
 	// shift on this value yet. Hairpinning only matters for same-NAT (LAN)
 	// peers, while the natcheck user's question is about inter-NAT WebRTC.
@@ -163,7 +163,7 @@ var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 // carried through to Verdict.Hairpinning unchanged. v0.1.4 does NOT shift
 // the forecast based on this value — hairpinning only matters for same-NAT
 // (LAN) peers, which is not the natcheck user's question. See the Verdict
-// field doc and docs/design.md:478.
+// field doc and docs/design.md.
 func Classify(results []probe.Result, filtering *probe.FilteringResult, hairpinning *probe.HairpinningResult) Verdict {
 	v := classifyMapping(results)
 	applyFiltering(&v, filtering)
