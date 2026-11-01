@@ -101,16 +101,21 @@ func ProbeFiltering(ctx context.Context, server Server, timeout time.Duration) F
 	}
 
 	// Test 2: CHANGE-IP|CHANGE-PORT.
-	t2, _ := sendBindingAndWait(conn, remote, perTest, &changeRequestPayload{ip: true, port: true})
+	t2, err2 := sendBindingAndWait(conn, remote, perTest, &changeRequestPayload{ip: true, port: true})
 
 	// Test 3: CHANGE-PORT.
-	t3, _ := sendBindingAndWait(conn, remote, perTest, &changeRequestPayload{ip: false, port: true})
+	t3, err3 := sendBindingAndWait(conn, remote, perTest, &changeRequestPayload{ip: false, port: true})
 
-	// Compare to the target, not OTHER-ADDRESS: provider topologies can reply
-	// from an address other than the advertised one, and that must not read as
-	// stricter filtering. Only a reply from the target itself proves the request
-	// was ignored, in which case neither test measured anything.
-	if (t2 != nil && t2.source == target) || (t3 != nil && t3.source == target) {
+	// Only silence is a filtering result. Any other failure means a reply got
+	// through and the test measured nothing.
+	for _, err := range []error{err2, err3} {
+		if err != nil && !errors.Is(err, errNoResponse) {
+			res.Err = fmt.Errorf("%w: %w", ErrFilteringNotSupported, err)
+			return res
+		}
+	}
+
+	if changeRequestIgnored(target, res.Test1Other, t2, t3) {
 		res.Err = ErrFilteringNotSupported
 		return res
 	}
@@ -118,6 +123,26 @@ func ProbeFiltering(ctx context.Context, server Server, timeout time.Duration) F
 	res.Test3Received = t3 != nil
 
 	return res
+}
+
+// changeRequestIgnored reports whether a Test 2 or Test 3 reply lacks the change
+// asked for, in which case neither test measured anything: Test 2 must come from
+// a new IP, Test 3 from a new endpoint. The comparison is to the target, not
+// OTHER-ADDRESS, because provider topologies can reply from an address other
+// than the advertised one, and that must not read as stricter filtering.
+//
+// Loopback has one IP on macOS, so a loopback responder can only simulate a
+// changed IP by replying from OTHER-ADDRESS. No routable server gets that pass:
+// one IP cannot honor CHANGE-IP.
+func changeRequestIgnored(target, other netip.AddrPort, t2, t3 *bindingResult) bool {
+	source, advertised := comparableEndpoint(target), comparableEndpoint(other)
+	if t3 != nil && t3.source == source {
+		return true
+	}
+	if t2 == nil || t2.source.Addr() != source.Addr() {
+		return false
+	}
+	return !(source.Addr().IsLoopback() && t2.source == advertised)
 }
 
 type changeRequestPayload struct {
@@ -179,8 +204,7 @@ func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Dura
 			return nil, err
 		}
 		if udp, ok := from.(*net.UDPAddr); ok {
-			src := udp.AddrPort()
-			out.source = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
+			out.source = comparableEndpoint(udp.AddrPort())
 		}
 		return out, nil
 	}
