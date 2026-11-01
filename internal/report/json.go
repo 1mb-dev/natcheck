@@ -38,7 +38,7 @@ type reportJSON struct {
 	WebRTCForecast forecastJSON  `json:"webrtc_forecast"`
 	Warnings       []string      `json:"warnings"`
 	Filtering      filteringJSON `json:"filtering"`
-	// Hairpinning is tri-state per docs/design.md:361: true / false / null.
+	// Hairpinning is tri-state per docs/design.md: true / false / null.
 	// null distinguishes "didn't try" from "tested false". Always null until
 	// the probe path lands; see todos/releases/v0.1.4/phase-4-hairpinning.md.
 	Hairpinning *bool `json:"hairpinning"`

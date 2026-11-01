@@ -15,6 +15,7 @@ import (
 
 // Three fixture verdicts cover the JSON/human schema surface:
 //   - eim_cone: 2/2 probes agree on a public IPv4 endpoint (happy path)
+//   - ipv4_untested: probes agree over IPv6 and no IPv4 probe answered
 //   - insufficient_server_diversity: probes agree, but both reached one server IP
 //   - adm_strict: 2/2 probes disagree (symmetric NAT; TURN required)
 //   - blocked: 2/2 probes failed (no network to outbound STUN)
@@ -50,6 +51,24 @@ func fixtureInsufficientServerDiversity() (classify.Verdict, []probe.Result, *pr
 			Target: netip.MustParseAddrPort("192.0.2.10:3479"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    25 * time.Millisecond,
+		},
+	}
+	return classify.Classify(probes, nil, nil), probes, nil
+}
+
+func fixtureIPv4Untested() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("[2001:db8:a::1]:19302"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("[2001:db8:b::1]:3478"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    31 * time.Millisecond,
 		},
 	}
 	return classify.Classify(probes, nil, nil), probes, nil
@@ -171,7 +190,7 @@ func fixtureHairpinningDetected() (classify.Verdict, []probe.Result, *probe.Filt
 
 // fixtureHairpinningNotDetected: EIM mapping + hairpinning probed but did
 // not loop back (genuine negative OR per-NAT filtering false-negative per
-// docs/design.md:428).
+// docs/design.md).
 func fixtureHairpinningNotDetected() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 	probes := []probe.Result{
 		{
@@ -329,6 +348,7 @@ func TestRender_Golden(t *testing.T) {
 		fixture func() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 	}{
 		{"eim_cone", fixtureEIMCone},
+		{"ipv4_untested", fixtureIPv4Untested},
 		{"insufficient_server_diversity", fixtureInsufficientServerDiversity},
 		{"adm_strict", fixtureADMStrict},
 		{"blocked", fixtureBlocked},

@@ -101,7 +101,7 @@ func TestClassify(t *testing.T) {
 			},
 			wantType:   EndpointIndependentMapping,
 			wantLegacy: "cone",
-			wantP2P:    "likely",
+			wantP2P:    "possible",
 			wantTURN:   false,
 		},
 		{
@@ -163,7 +163,7 @@ func TestClassify(t *testing.T) {
 			},
 			wantType:   EndpointIndependentMapping,
 			wantLegacy: "cone",
-			wantP2P:    "likely",
+			wantP2P:    "possible",
 			wantTURN:   false,
 		},
 		{
@@ -175,7 +175,7 @@ func TestClassify(t *testing.T) {
 			},
 			wantType:   EndpointIndependentMapping,
 			wantLegacy: "cone",
-			wantP2P:    "likely",
+			wantP2P:    "possible",
 			wantTURN:   false,
 		},
 		{
@@ -200,7 +200,7 @@ func TestClassify(t *testing.T) {
 			wantType:   EndpointIndependentMapping,
 			wantLegacy: "cone",
 			wantCGNAT:  false,
-			wantP2P:    "likely",
+			wantP2P:    "possible",
 			wantTURN:   false,
 		},
 		{
@@ -363,7 +363,7 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 			name:           "nil_filtering",
 			filtering:      nil,
 			wantBehavior:   FilteringUntested,
-			wantP2P:        "likely",
+			wantP2P:        "possible",
 			wantWarnHas:    WarnFilteringBehaviorNotTested,
 			wantWarnAbsent: WarnFilteringSkippedNoChangeRequest,
 		},
@@ -371,7 +371,7 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 			name:           "not_supported",
 			filtering:      &probe.FilteringResult{Server: target, Err: probe.ErrFilteringNotSupported},
 			wantBehavior:   FilteringUntested,
-			wantP2P:        "likely",
+			wantP2P:        "possible",
 			wantWarnHas:    WarnFilteringSkippedNoChangeRequest,
 			wantWarnAbsent: WarnFilteringBehaviorNotTested,
 		},
@@ -379,7 +379,7 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 			name:           "test1_failed",
 			filtering:      &probe.FilteringResult{Server: target, Err: probe.ErrTest1Failed},
 			wantBehavior:   FilteringUntested,
-			wantP2P:        "likely",
+			wantP2P:        "possible",
 			wantWarnHas:    WarnFilteringBehaviorNotTested,
 			wantWarnAbsent: WarnFilteringSkippedNoChangeRequest,
 		},
@@ -419,7 +419,7 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 				Server: target, Test2Received: true, Test3Received: false,
 			},
 			wantBehavior:   FilteringUntested,
-			wantP2P:        "likely",
+			wantP2P:        "possible",
 			wantWarnHas:    WarnFilteringBehaviorNotTested,
 			wantWarnAbsent: WarnFilteringSkippedNoChangeRequest,
 		},
@@ -497,7 +497,7 @@ func TestClassify_MixedAddressFamily(t *testing.T) {
 			},
 			wantType:       EndpointIndependentMapping,
 			wantLegacy:     "cone",
-			wantP2P:        "likely",
+			wantP2P:        "possible",
 			wantWarnHas:    []string{WarnMixedAddressFamilyProbes, WarnFilteringBehaviorNotTested},
 			wantWarnAbsent: []string{WarnADMOrStricter, WarnInsufficientProbes, WarnAllProbesFailed},
 		},
@@ -523,7 +523,7 @@ func TestClassify_MixedAddressFamily(t *testing.T) {
 			},
 			wantType:    EndpointIndependentMapping,
 			wantLegacy:  "cone",
-			wantP2P:     "likely",
+			wantP2P:     "possible",
 			wantWarnHas: []string{WarnMixedAddressFamilyProbes, WarnInsufficientProbes},
 		},
 		{
@@ -558,7 +558,7 @@ func TestClassify_MixedAddressFamily(t *testing.T) {
 			},
 			wantType:       EndpointIndependentMapping,
 			wantLegacy:     "cone",
-			wantP2P:        "likely",
+			wantP2P:        "possible",
 			wantWarnAbsent: []string{WarnMixedAddressFamilyProbes, WarnADMOrStricter, WarnInsufficientProbes},
 		},
 		{
@@ -569,7 +569,7 @@ func TestClassify_MixedAddressFamily(t *testing.T) {
 			},
 			wantType:       EndpointIndependentMapping,
 			wantLegacy:     "cone",
-			wantP2P:        "likely",
+			wantP2P:        "possible",
 			wantWarnAbsent: []string{WarnMixedAddressFamilyProbes, WarnADMOrStricter, WarnInsufficientProbes},
 		},
 	}
@@ -617,7 +617,7 @@ func TestDecideForecast_Precedence(t *testing.T) {
 		{"apdm", Verdict{Type: AddressPortDependentMapping}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
 		{"unknown_mapping", Verdict{Type: Unknown}, Forecast{DirectP2P: "unknown"}},
 		{"eim_eif", Verdict{Type: EndpointIndependentMapping, Filtering: FilteringEndpointIndependent}, Forecast{DirectP2P: "likely"}},
-		{"eim_untested", Verdict{Type: EndpointIndependentMapping, Filtering: FilteringUntested}, Forecast{DirectP2P: "likely"}},
+		{"eim_untested", Verdict{Type: EndpointIndependentMapping, Filtering: FilteringUntested}, Forecast{DirectP2P: "possible"}},
 		{"eim_adf", Verdict{Type: EndpointIndependentMapping, Filtering: FilteringAddressDependent}, Forecast{DirectP2P: "possible"}},
 		{"eim_apdf", Verdict{Type: EndpointIndependentMapping, Filtering: FilteringAddressAndPortDependent}, Forecast{DirectP2P: "possible"}},
 	}
@@ -709,6 +709,31 @@ func TestClassify_ServerDiversity(t *testing.T) {
 			}
 			if tc.wantType == Unknown && v.Forecast.DirectP2P != "unknown" {
 				t.Errorf("DirectP2P = %q, want unknown", v.Forecast.DirectP2P)
+			}
+		})
+	}
+}
+
+func TestClassify_IPv4UntestedWarning(t *testing.T) {
+	v4 := func(host string) probe.Result { return ok(host, 3478, "203.0.113.45:51820", time.Millisecond) }
+	v6 := func(host string) probe.Result { return ok(host, 3478, "[2001:db8::1]:51820", time.Millisecond) }
+
+	cases := []struct {
+		name    string
+		results []probe.Result
+		want    bool
+	}{
+		{"IPv6 only", []probe.Result{v6("a"), v6("b")}, true},
+		{"IPv6 answered, IPv4 server failed", []probe.Result{v6("a"), v6("b"), fail("c", 3478)}, true},
+		{"IPv4 only", []probe.Result{v4("a"), v4("b")}, false},
+		{"both families", []probe.Result{v4("a"), v6("b")}, false},
+		{"nothing answered", []probe.Result{fail("a", 3478), fail("b", 3478)}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Classify(tc.results, nil, nil)
+			if got := slices.Contains(v.Warnings, WarnIPv4Untested); got != tc.want {
+				t.Errorf("warning present = %v, want %v; warnings=%v", got, tc.want, v.Warnings)
 			}
 		})
 	}

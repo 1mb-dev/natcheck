@@ -141,7 +141,7 @@ func TestRun_EIM_Exit0(t *testing.T) {
 	if code != 0 {
 		t.Errorf("code = %d, want 0", code)
 	}
-	if !strings.Contains(out, "Direct P2P: likely") {
+	if !strings.Contains(out, "Direct P2P: possible") {
 		t.Errorf("missing forecast line; got %q", out)
 	}
 }

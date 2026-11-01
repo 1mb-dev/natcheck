@@ -114,12 +114,12 @@ type Verdict struct {
 	//   - the initial Test 1 binding probe failed (ErrTest1Failed);
 	//   - the (T2=true, T3=false) RFC-impossible state was observed.
 	FilteringTestedAgainst probe.Server
-	// Hairpinning is tri-state per docs/design.md:361:
+	// Hairpinning is tri-state per docs/design.md:
 	//   - nil:    not tested (probe didn't run / socket setup failed)
 	//   - &true:  tagged loopback packet arrived
 	//   - &false: listen window elapsed without the packet (may be a true
 	//             negative OR a per-NAT filtering false-negative on the
-	//             hairpin path; see docs/design.md:428)
+	//             hairpin path; see docs/design.md)
 	// Carried through Classify unchanged in v0.1.4; forecast logic does NOT
 	// shift on this value yet. Hairpinning only matters for same-NAT (LAN)
 	// peers, while the natcheck user's question is about inter-NAT WebRTC.
@@ -140,6 +140,7 @@ const (
 	WarnMixedAddressFamilyProbes        = "mixed_address_family_probes"
 	WarnHairpinUntested                 = "hairpin_untested"
 	WarnInsufficientServerDiversity     = "insufficient_server_diversity"
+	WarnIPv4Untested                    = "ipv4_untested"
 )
 
 // cgnatPrefix is RFC 6598 shared address space.
@@ -162,7 +163,7 @@ var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 // carried through to Verdict.Hairpinning unchanged. v0.1.4 does NOT shift
 // the forecast based on this value — hairpinning only matters for same-NAT
 // (LAN) peers, which is not the natcheck user's question. See the Verdict
-// field doc and docs/design.md:478.
+// field doc and docs/design.md.
 func Classify(results []probe.Result, filtering *probe.FilteringResult, hairpinning *probe.HairpinningResult) Verdict {
 	v := classifyMapping(results)
 	applyFiltering(&v, filtering)
@@ -244,6 +245,12 @@ func classifyMapping(results []probe.Result) Verdict {
 	//   - WarnMixedAddressFamilyProbes fires whenever both families are present.
 	if multiFamily {
 		v.Warnings = appendUnique(v.Warnings, WarnMixedAddressFamilyProbes)
+	}
+	// A hostname is probed on one family, and DNS prefers IPv6, so an IPv6
+	// verdict can sit in front of a symmetric IPv4 NAT with nothing in the
+	// output to say so.
+	if len(v4) == 0 {
+		v.Warnings = appendUnique(v.Warnings, WarnIPv4Untested)
 	}
 	for _, g := range []*Verdict{v4g, v6g} {
 		if g == nil {
@@ -414,12 +421,14 @@ func decideForecast(v Verdict) Forecast {
 	case Unknown:
 		return Forecast{DirectP2P: "unknown", TURNRequired: false}
 	case EndpointIndependentMapping:
-		switch v.Filtering {
-		case FilteringAddressDependent, FilteringAddressAndPortDependent:
-			return Forecast{DirectP2P: "possible", TURNRequired: false}
-		default:
+		// Untested filtering must not read stronger than measured strict
+		// filtering: the same router would otherwise improve by being measured
+		// less. Most public STUN servers cannot measure it, so this is what
+		// default-server runs get.
+		if v.Filtering == FilteringEndpointIndependent {
 			return Forecast{DirectP2P: "likely", TURNRequired: false}
 		}
+		return Forecast{DirectP2P: "possible", TURNRequired: false}
 	default:
 		return Forecast{DirectP2P: "unknown", TURNRequired: false}
 	}

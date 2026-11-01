@@ -217,7 +217,7 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 			name:         "no NAT",
 			targets:      func(_ *testing.T, servers []*net.UDPAddr) []*net.UDPAddr { return servers },
 			wantType:     "EIM",
-			wantForecast: "likely",
+			wantForecast: "possible",
 			wantCode:     0,
 		},
 		{
@@ -226,7 +226,7 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 				return startNATSim(t, servers, false)
 			},
 			wantType:     "EIM",
-			wantForecast: "likely",
+			wantForecast: "possible",
 			wantCode:     0,
 		},
 		{
