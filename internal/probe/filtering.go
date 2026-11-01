@@ -108,11 +108,6 @@ func ProbeFiltering(ctx context.Context, server Server, timeout time.Duration) F
 	return res
 }
 
-type bindingResult struct {
-	mapped netip.AddrPort
-	other  netip.AddrPort
-}
-
 type changeRequestPayload struct {
 	ip, port bool
 }
@@ -166,27 +161,6 @@ func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Dura
 			// Stale response from a prior test; discard and keep reading.
 			continue
 		}
-		if resp.Type != stun.BindingSuccess {
-			return nil, fmt.Errorf("unexpected message type: %s", resp.Type)
-		}
-		var xor stun.XORMappedAddress
-		if err := xor.GetFrom(resp); err != nil {
-			return nil, fmt.Errorf("XOR-MAPPED-ADDRESS: %w", err)
-		}
-		mappedIP, ok := netip.AddrFromSlice(xor.IP)
-		if !ok {
-			return nil, errors.New("invalid mapped IP")
-		}
-		out := &bindingResult{
-			mapped: netip.AddrPortFrom(mappedIP.Unmap(), uint16(xor.Port)),
-		}
-		var oa stun.OtherAddress
-		if err := oa.GetFrom(resp); err == nil {
-			otherIP, ok := netip.AddrFromSlice(oa.IP)
-			if ok {
-				out.other = netip.AddrPortFrom(otherIP.Unmap(), uint16(oa.Port))
-			}
-		}
-		return out, nil
+		return parseBindingSuccess(resp)
 	}
 }

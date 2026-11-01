@@ -12,7 +12,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/1mb-dev/natcheck/internal/classify"
@@ -93,7 +92,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober p
 		}(opts.servers[0], budget)
 	}
 
-	results := probeAll(probeCtx, prober, opts.servers)
+	results := prober.ProbeAll(probeCtx, opts.servers)
 
 	if opts.verbose {
 		for _, r := range results {
@@ -160,23 +159,6 @@ func logProbe(w io.Writer, r probe.Result) {
 	}
 	_, _ = fmt.Fprintf(w, "probe %s: rtt=%s mapped=%s\n",
 		addr, r.RTT.Round(time.Millisecond), r.Mapped)
-}
-
-// probeAll runs one probe per server concurrently under the shared context.
-// Results preserve input order — tests and the rendered report both rely on
-// this determinism.
-func probeAll(ctx context.Context, prober probe.Prober, servers []probe.Server) []probe.Result {
-	results := make([]probe.Result, len(servers))
-	var wg sync.WaitGroup
-	for i, s := range servers {
-		wg.Add(1)
-		go func(i int, s probe.Server) {
-			defer wg.Done()
-			results[i] = prober.Probe(ctx, s)
-		}(i, s)
-	}
-	wg.Wait()
-	return results
 }
 
 // options is the parsed flag state.

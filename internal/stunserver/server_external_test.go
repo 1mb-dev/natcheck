@@ -31,7 +31,7 @@ func TestServe_RoundTrip(t *testing.T) {
 
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), time.Second)
 	defer probeCancel()
-	res := probe.NewSTUN().Probe(probeCtx, probe.Server{Host: "127.0.0.1", Port: udpAddr.Port})
+	res := probe.NewSTUN().ProbeAll(probeCtx, []probe.Server{{Host: "127.0.0.1", Port: udpAddr.Port}})[0]
 	if res.Err != nil {
 		t.Fatalf("probe: %v", res.Err)
 	}

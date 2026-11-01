@@ -25,7 +25,15 @@ type fakeProber struct {
 	calls           int
 }
 
-func (f *fakeProber) Probe(ctx context.Context, s probe.Server) probe.Result {
+func (f *fakeProber) ProbeAll(ctx context.Context, servers []probe.Server) []probe.Result {
+	results := make([]probe.Result, len(servers))
+	for i, s := range servers {
+		results[i] = f.probe(ctx, s)
+	}
+	return results
+}
+
+func (f *fakeProber) probe(ctx context.Context, s probe.Server) probe.Result {
 	if f.delay > 0 {
 		select {
 		case <-time.After(f.delay):
@@ -227,25 +235,6 @@ func TestRun_MultipleServerOverride(t *testing.T) {
 	}
 }
 
-func TestRun_ConcurrentTiming(t *testing.T) {
-	fp := &fakeProber{
-		delay: 200 * time.Millisecond,
-		resultsByServer: map[string]probe.Result{
-			"stun.l.google.com:19302":  {Mapped: netip.MustParseAddrPort("203.0.113.45:51820"), RTT: 200 * time.Millisecond},
-			"stun.cloudflare.com:3478": {Mapped: netip.MustParseAddrPort("203.0.113.45:51820"), RTT: 200 * time.Millisecond},
-		},
-	}
-	start := time.Now()
-	code, _, _ := run(t, fp, "--timeout", "1s")
-	elapsed := time.Since(start)
-	if code != 0 {
-		t.Errorf("code = %d, want 0", code)
-	}
-	if elapsed > 400*time.Millisecond {
-		t.Errorf("probes did not run concurrently: elapsed=%v (expected ~200ms)", elapsed)
-	}
-}
-
 func TestRun_TimeoutFires(t *testing.T) {
 	fp := &fakeProber{
 		delay: 500 * time.Millisecond,
@@ -317,22 +306,5 @@ func TestRun_FilteringSkippedWhenNoCapableServer(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&called); n != 0 {
 		t.Errorf("filterer called %d times, want 0 (no server advertised OTHER-ADDRESS)", n)
-	}
-}
-
-func TestRun_ResultOrderMatchesInputOrder(t *testing.T) {
-	fp := &fakeProber{resultsByServer: map[string]probe.Result{
-		// Give cloudflare faster RTT, but input order is google first.
-		"stun.l.google.com:19302":  {Mapped: netip.MustParseAddrPort("203.0.113.45:51820"), RTT: 30 * time.Millisecond},
-		"stun.cloudflare.com:3478": {Mapped: netip.MustParseAddrPort("203.0.113.45:51820"), RTT: 10 * time.Millisecond},
-	}}
-	_, out, _ := run(t, fp)
-	googleIdx := strings.Index(out, "stun.l.google.com:19302")
-	cloudflareIdx := strings.Index(out, "stun.cloudflare.com:3478")
-	if googleIdx < 0 || cloudflareIdx < 0 {
-		t.Fatalf("probe lines missing; out=%q", out)
-	}
-	if googleIdx > cloudflareIdx {
-		t.Errorf("expected google before cloudflare in output; got:\n%s", out)
 	}
 }

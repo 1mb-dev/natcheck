@@ -79,10 +79,7 @@ func probeHairpinning(ctx context.Context, server Server, timeout time.Duration,
 	ip := ips[0].Unmap()
 	remote := &net.UDPAddr{IP: net.IP(ip.AsSlice()), Port: server.Port}
 
-	network, listenAddr := "udp4", "0.0.0.0:0"
-	if ip.Is6() {
-		network, listenAddr = "udp6", "[::]:0"
-	}
+	network, listenAddr := pickNetwork(ip)
 
 	connA, err := net.ListenPacket(network, listenAddr)
 	if err != nil {
@@ -99,10 +96,9 @@ func probeHairpinning(ctx context.Context, server Server, timeout time.Duration,
 	defer func() { _ = connB.Close() }()
 
 	// Bridge ctx.Done() to both sockets' deadlines so a cancel-without-
-	// deadline context unblocks in-flight reads/writes promptly (mirrors
-	// the pattern in stun.go:43-55). The deferred close(done) fires before
-	// the conn.Close() defers (LIFO), so the goroutine exits cleanly on
-	// the success path.
+	// deadline context unblocks in-flight reads/writes promptly. The deferred
+	// close(done) fires before the conn.Close() defers (LIFO), so the goroutine
+	// exits cleanly on the success path.
 	done := make(chan struct{})
 	defer close(done)
 	go func() {
