@@ -15,6 +15,7 @@ import (
 
 // Three fixture verdicts cover the JSON/human schema surface:
 //   - eim_cone: 2/2 probes agree on a public IPv4 endpoint (happy path)
+//   - insufficient_server_diversity: probes agree, but both reached one server IP
 //   - adm_strict: 2/2 probes disagree (symmetric NAT; TURN required)
 //   - blocked: 2/2 probes failed (no network to outbound STUN)
 
@@ -22,13 +23,33 @@ func fixtureEIMCone() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    24 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    31 * time.Millisecond,
+		},
+	}
+	return classify.Classify(probes, nil, nil), probes, nil
+}
+
+func fixtureInsufficientServerDiversity() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "192.0.2.10", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.10:3478"),
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "192.0.2.10", Port: 3479},
+			Target: netip.MustParseAddrPort("192.0.2.10:3479"),
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    25 * time.Millisecond,
 		},
 	}
 	return classify.Classify(probes, nil, nil), probes, nil
@@ -70,12 +91,14 @@ func fixtureFilteringEIF() (classify.Verdict, []probe.Result, *probe.FilteringRe
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.example.org", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.10:3478"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
 			RTT:    18 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.20:19302"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    24 * time.Millisecond,
 		},
@@ -96,12 +119,14 @@ func fixtureFilteringADF() (classify.Verdict, []probe.Result, *probe.FilteringRe
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.example.org", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.10:3478"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
 			RTT:    18 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.20:19302"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    24 * time.Millisecond,
 		},
@@ -129,11 +154,13 @@ func fixtureHairpinningDetected() (classify.Verdict, []probe.Result, *probe.Filt
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    24 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    31 * time.Millisecond,
 		},
@@ -149,11 +176,13 @@ func fixtureHairpinningNotDetected() (classify.Verdict, []probe.Result, *probe.F
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    24 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    31 * time.Millisecond,
 		},
@@ -169,11 +198,13 @@ func fixtureHairpinningUntested() (classify.Verdict, []probe.Result, *probe.Filt
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    24 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    31 * time.Millisecond,
 		},
@@ -206,21 +237,25 @@ func fixtureMixedV4V6Disagree() (classify.Verdict, []probe.Result, *probe.Filter
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    24 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    31 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun6.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.30:19302"),
 			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
 			RTT:    42 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun6.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.40:3478"),
 			Mapped: netip.MustParseAddrPort("[2001:db8::2]:51821"),
 			RTT:    47 * time.Millisecond,
 		},
@@ -234,12 +269,14 @@ func fixtureFilteringAPDF() (classify.Verdict, []probe.Result, *probe.FilteringR
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.example.org", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.10:3478"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
 			RTT:    18 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.20:19302"),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			RTT:    24 * time.Millisecond,
 		},
@@ -292,6 +329,7 @@ func TestRender_Golden(t *testing.T) {
 		fixture func() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 	}{
 		{"eim_cone", fixtureEIMCone},
+		{"insufficient_server_diversity", fixtureInsufficientServerDiversity},
 		{"adm_strict", fixtureADMStrict},
 		{"blocked", fixtureBlocked},
 		{"filtering_eif", fixtureFilteringEIF},

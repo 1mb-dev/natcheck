@@ -1,0 +1,11 @@
+Direct P2P: unknown
+NAT type: Unknown
+Public endpoint: 203.0.113.45:51820
+
+Probes:
+  192.0.2.10:3478  rtt=24ms  mapped=203.0.113.45:51820
+  192.0.2.10:3479  rtt=25ms  mapped=203.0.113.45:51820
+
+Filtering not tested.
+Servers share one IP, which cannot show mapping behavior. Use --server values on two different IPs.
+Hairpinning not tested (local socket setup or STUN probe failed).

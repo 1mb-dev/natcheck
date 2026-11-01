@@ -29,6 +29,7 @@ func (f *fakeProber) ProbeAll(ctx context.Context, servers []probe.Server) []pro
 	results := make([]probe.Result, len(servers))
 	for i, s := range servers {
 		results[i] = f.probe(ctx, s)
+		results[i].Target = netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i + 1)}), uint16(s.Port))
 	}
 	return results
 }
