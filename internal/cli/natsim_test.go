@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 
@@ -107,6 +109,102 @@ func (n *natSim) reverse(ext *net.UDPConn, client *net.UDPAddr) {
 	}
 }
 
+// distinctTargets keeps real socket results and gives each probe its own
+// synthetic server IP. Loopback offers one IP on macOS, and the diversity guard
+// correctly refuses to call that EIM, so without this the cone scenarios cannot
+// reach the verdict they exist to pin.
+type distinctTargets struct{ probe.Prober }
+
+func (d distinctTargets) ProbeAll(ctx context.Context, servers []probe.Server) []probe.Result {
+	results := d.Prober.ProbeAll(ctx, servers)
+	for i := range results {
+		results[i].Target = netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i + 1)}), results[i].Target.Port())
+	}
+	return results
+}
+
+type mappingReport struct {
+	NATType        string `json:"nat_type"`
+	WebRTCForecast struct {
+		DirectP2P string `json:"direct_p2p"`
+	} `json:"webrtc_forecast"`
+	Warnings []string `json:"warnings"`
+}
+
+func decodeMappingReport(t *testing.T, out, errOut string) mappingReport {
+	t.Helper()
+	var report mappingReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("decode report: %v; out=%q errOut=%q", err, out, errOut)
+	}
+	return report
+}
+
+func TestRun_OneServerIPCannotProveEIM(t *testing.T) {
+	tests := []struct {
+		name         string
+		targets      func(t *testing.T, servers []*net.UDPAddr) []*net.UDPAddr
+		wantType     string
+		wantForecast string
+		wantWarning  bool
+	}{
+		{
+			name:         "no NAT",
+			targets:      func(_ *testing.T, servers []*net.UDPAddr) []*net.UDPAddr { return servers },
+			wantType:     "Unknown",
+			wantForecast: "unknown",
+			wantWarning:  true,
+		},
+		{
+			name: "endpoint-independent NAT",
+			targets: func(t *testing.T, servers []*net.UDPAddr) []*net.UDPAddr {
+				return startNATSim(t, servers, false)
+			},
+			wantType:     "Unknown",
+			wantForecast: "unknown",
+			wantWarning:  true,
+		},
+		{
+			name: "per-destination NAT",
+			targets: func(t *testing.T, servers []*net.UDPAddr) []*net.UDPAddr {
+				return startNATSim(t, servers, true)
+			},
+			wantType:     "ADM",
+			wantForecast: "unlikely",
+		},
+		{
+			name: "duplicate server",
+			targets: func(_ *testing.T, servers []*net.UDPAddr) []*net.UDPAddr {
+				return []*net.UDPAddr{servers[0], servers[0]}
+			},
+			wantType:     "Unknown",
+			wantForecast: "unknown",
+			wantWarning:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			targets := tt.targets(t, startSTUNServers(t, 2))
+			code, out, errOut := run(t, probe.NewSTUN(), "--json", "--timeout", "2s",
+				"--server", targets[0].String(), "--server", targets[1].String())
+
+			report := decodeMappingReport(t, out, errOut)
+			if report.NATType != tt.wantType {
+				t.Errorf("nat_type = %q, want %q; out=%s", report.NATType, tt.wantType, out)
+			}
+			if report.WebRTCForecast.DirectP2P != tt.wantForecast {
+				t.Errorf("direct_p2p = %q, want %q", report.WebRTCForecast.DirectP2P, tt.wantForecast)
+			}
+			if code != 1 {
+				t.Errorf("exit code = %d, want 1", code)
+			}
+			if got := slices.Contains(report.Warnings, "insufficient_server_diversity"); got != tt.wantWarning {
+				t.Errorf("warning present = %v, want %v; warnings=%v", got, tt.wantWarning, report.Warnings)
+			}
+		})
+	}
+}
+
 func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -144,18 +242,10 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			targets := tt.targets(t, startSTUNServers(t, 2))
-			code, out, errOut := run(t, probe.NewSTUN(), "--json", "--timeout", "2s",
+			code, out, errOut := run(t, distinctTargets{probe.NewSTUN()}, "--json", "--timeout", "2s",
 				"--server", targets[0].String(), "--server", targets[1].String())
 
-			var report struct {
-				NATType        string `json:"nat_type"`
-				WebRTCForecast struct {
-					DirectP2P string `json:"direct_p2p"`
-				} `json:"webrtc_forecast"`
-			}
-			if err := json.Unmarshal([]byte(out), &report); err != nil {
-				t.Fatalf("decode report: %v; out=%q errOut=%q", err, out, errOut)
-			}
+			report := decodeMappingReport(t, out, errOut)
 			if report.NATType != tt.wantType {
 				t.Errorf("nat_type = %q, want %q; out=%s", report.NATType, tt.wantType, out)
 			}

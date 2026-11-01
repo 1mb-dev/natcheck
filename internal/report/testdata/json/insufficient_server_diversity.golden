@@ -1,0 +1,30 @@
+{
+  "nat_type": "Unknown",
+  "nat_type_legacy": "",
+  "public_endpoint": "203.0.113.45:51820",
+  "probes": [
+    {
+      "server": "192.0.2.10:3478",
+      "rtt_ms": 24,
+      "mapped": "203.0.113.45:51820"
+    },
+    {
+      "server": "192.0.2.10:3479",
+      "rtt_ms": 25,
+      "mapped": "203.0.113.45:51820"
+    }
+  ],
+  "webrtc_forecast": {
+    "direct_p2p": "unknown",
+    "turn_required": false
+  },
+  "warnings": [
+    "filtering_behavior_not_tested",
+    "insufficient_server_diversity",
+    "hairpin_untested"
+  ],
+  "filtering": {
+    "behavior": "untested"
+  },
+  "hairpinning": null
+}

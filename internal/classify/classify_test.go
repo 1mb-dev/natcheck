@@ -2,7 +2,9 @@ package classify
 
 import (
 	"errors"
+	"hash/fnv"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
@@ -11,9 +13,19 @@ import (
 
 var errProbe = errors.New("test probe failure")
 
+// targetFor gives each host its own synthetic resolved IP, so fixtures with
+// different hosts count as distinct servers.
+func targetFor(host string, port int) netip.AddrPort {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(host))
+	sum := h.Sum32()
+	return netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 18, byte(sum >> 8), byte(sum)}), uint16(port))
+}
+
 func ok(host string, port int, mapped string, rtt time.Duration) probe.Result {
 	return probe.Result{
 		Server: probe.Server{Host: host, Port: port},
+		Target: targetFor(host, port),
 		Mapped: netip.MustParseAddrPort(mapped),
 		RTT:    rtt,
 	}
@@ -326,11 +338,13 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 	eimProbes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.example.org", Port: 3478},
+			Target: targetFor("stun.example.org", 3478),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
 		},
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: targetFor("stun.l.google.com", 19302),
 			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
 		},
 	}
@@ -449,6 +463,7 @@ func TestClassify_MixedAddressFamily(t *testing.T) {
 	v4ok := func(host, mapped string) probe.Result {
 		return probe.Result{
 			Server: probe.Server{Host: host, Port: 3478},
+			Target: targetFor(host, 3478),
 			Mapped: netip.MustParseAddrPort(mapped),
 			RTT:    10 * time.Millisecond,
 		}
@@ -456,6 +471,7 @@ func TestClassify_MixedAddressFamily(t *testing.T) {
 	v6ok := func(host, mapped string) probe.Result {
 		return probe.Result{
 			Server: probe.Server{Host: host, Port: 3478},
+			Target: targetFor(host, 3478),
 			Mapped: netip.MustParseAddrPort(mapped),
 			RTT:    10 * time.Millisecond,
 		}
@@ -610,6 +626,89 @@ func TestDecideForecast_Precedence(t *testing.T) {
 			got := decideForecast(tc.v)
 			if got != tc.want {
 				t.Errorf("decideForecast(%+v) = %+v, want %+v", tc.v, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestClassify_ServerDiversity(t *testing.T) {
+	const mapped = "203.0.113.45:51820"
+	at := func(host, target, m string) probe.Result {
+		return probe.Result{
+			Server: probe.Server{Host: host, Port: 3478},
+			Target: netip.MustParseAddrPort(target),
+			Mapped: netip.MustParseAddrPort(m),
+		}
+	}
+	noTarget := func(host string) probe.Result {
+		return probe.Result{Server: probe.Server{Host: host, Port: 3478}, Mapped: netip.MustParseAddrPort(mapped)}
+	}
+
+	cases := []struct {
+		name        string
+		results     []probe.Result
+		wantType    NATType
+		wantWarning bool
+	}{
+		{
+			name:        "two names for one IP",
+			results:     []probe.Result{at("a", "192.0.2.1:3478", mapped), at("b", "192.0.2.1:3478", mapped)},
+			wantType:    Unknown,
+			wantWarning: true,
+		},
+		{
+			name:        "two ports on one IP",
+			results:     []probe.Result{at("a", "192.0.2.1:3478", mapped), at("a", "192.0.2.1:3479", mapped)},
+			wantType:    Unknown,
+			wantWarning: true,
+		},
+		{
+			name:     "different mappings from one IP still prove not EIM",
+			results:  []probe.Result{at("a", "192.0.2.1:3478", mapped), at("a", "192.0.2.1:3479", "203.0.113.45:51821")},
+			wantType: AddressDependentMapping,
+		},
+		{
+			name: "three servers on two IPs",
+			results: []probe.Result{
+				at("a", "192.0.2.1:3478", mapped), at("b", "192.0.2.1:3479", mapped), at("c", "192.0.2.2:3478", mapped),
+			},
+			wantType: EndpointIndependentMapping,
+		},
+		{
+			name:        "missing target on one probe fails closed",
+			results:     []probe.Result{at("a", "192.0.2.1:3478", mapped), noTarget("b")},
+			wantType:    Unknown,
+			wantWarning: true,
+		},
+		{
+			name:        "missing targets on all probes fail closed",
+			results:     []probe.Result{noTarget("a"), noTarget("b")},
+			wantType:    Unknown,
+			wantWarning: true,
+		},
+		{
+			name: "diversity is judged per family",
+			results: []probe.Result{
+				at("a", "192.0.2.1:3478", mapped),
+				at("b", "192.0.2.1:3478", mapped),
+				at("c", "[2001:db8::1]:3478", "[2001:db8::99]:5000"),
+				at("d", "[2001:db8::2]:3478", "[2001:db8::99]:5000"),
+			},
+			wantType:    EndpointIndependentMapping,
+			wantWarning: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Classify(tc.results, nil, nil)
+			if v.Type != tc.wantType {
+				t.Errorf("Type = %v, want %v", v.Type, tc.wantType)
+			}
+			if got := slices.Contains(v.Warnings, WarnInsufficientServerDiversity); got != tc.wantWarning {
+				t.Errorf("warning present = %v, want %v; warnings=%v", got, tc.wantWarning, v.Warnings)
+			}
+			if tc.wantType == Unknown && v.Forecast.DirectP2P != "unknown" {
+				t.Errorf("DirectP2P = %q, want unknown", v.Forecast.DirectP2P)
 			}
 		})
 	}

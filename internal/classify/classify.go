@@ -139,6 +139,7 @@ const (
 	WarnFilteringSkippedNoChangeRequest = "filtering_skipped_no_change_request"
 	WarnMixedAddressFamilyProbes        = "mixed_address_family_probes"
 	WarnHairpinUntested                 = "hairpin_untested"
+	WarnInsufficientServerDiversity     = "insufficient_server_diversity"
 )
 
 // cgnatPrefix is RFC 6598 shared address space.
@@ -327,10 +328,17 @@ func classifyGroup(group []probe.Result) Verdict {
 				break
 			}
 		}
-		if allSame {
+		switch {
+		case allSame && distinctTargetIPs(group) < 2:
+			// Agreement from one server IP cannot separate EIM from ADM, and
+			// a warning alone would still exit 0. A missing Target counts as
+			// no IP, so a Prober that omits it cannot earn an EIM verdict.
+			v.Type = Unknown
+			v.Warnings = append(v.Warnings, WarnInsufficientServerDiversity)
+		case allSame:
 			v.Type = EndpointIndependentMapping
 			v.LegacyName = "cone"
-		} else {
+		default:
 			v.Type = AddressDependentMapping
 			v.LegacyName = "symmetric"
 			v.Warnings = append(v.Warnings, WarnADMOrStricter)
@@ -338,6 +346,16 @@ func classifyGroup(group []probe.Result) Verdict {
 		applyCGNAT(&v)
 	}
 	return v
+}
+
+func distinctTargetIPs(group []probe.Result) int {
+	ips := make(map[netip.Addr]struct{}, len(group))
+	for _, r := range group {
+		if r.Target.IsValid() {
+			ips[r.Target.Addr()] = struct{}{}
+		}
+	}
+	return len(ips)
 }
 
 // applyFiltering folds *probe.FilteringResult into the verdict. Updates
