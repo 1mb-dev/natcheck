@@ -5,9 +5,12 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/1mb-dev/natcheck/internal/stunserver"
 	"github.com/pion/stun/v3"
 )
 
@@ -145,31 +148,127 @@ func TestProbeAll_DropsValidReplyFromWrongSource(t *testing.T) {
 	}
 }
 
-func TestProbeAll_FloodCannotExtendDeadline(t *testing.T) {
-	f := newFakeSTUN(t, 0, behaviorGarbled)
-	stop := make(chan struct{})
-	defer close(stop)
+func TestProbeAll_FloodFromServerCannotExtendDeadline(t *testing.T) {
+	flooder, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = flooder.Close() }()
+
+	var sent atomic.Int64
 	go func() {
-		conn := f.conn
+		buf := make([]byte, 1500)
+		_, client, err := flooder.ReadFrom(buf)
+		if err != nil {
+			return
+		}
 		for {
-			select {
-			case <-stop:
+			if _, err := flooder.WriteTo([]byte{0xFF}, client); err != nil {
 				return
-			default:
-				_, _ = conn.WriteTo([]byte{0xFF}, conn.LocalAddr())
 			}
+			sent.Add(1)
 		}
 	}()
+	good := newFakeSTUN(t, 20*time.Millisecond, behaviorNormal)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	res := probeOne(ctx, fakeServer(f))
-	if res.Err == nil {
-		t.Fatal("expected error, got success")
+	res := NewSTUN().ProbeAll(ctx, []Server{
+		{Host: "127.0.0.1", Port: flooder.LocalAddr().(*net.UDPAddr).Port},
+		fakeServer(good),
+	})
+	elapsed := time.Since(start)
+
+	if sent.Load() < 100 {
+		t.Fatalf("flood never ran: %d packets", sent.Load())
 	}
-	if elapsed := time.Since(start); elapsed > 400*time.Millisecond {
-		t.Errorf("elapsed = %v, want the 100ms deadline to hold", elapsed)
+	if res[0].Err == nil {
+		t.Error("flooding server: expected error, got success")
+	}
+	if res[1].Err != nil {
+		t.Errorf("good server failed under flood: %v", res[1].Err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("elapsed = %v, want the 150ms deadline to hold", elapsed)
+	}
+}
+
+// failingConn reports a socket error on every read until closed.
+type failingConn struct {
+	net.PacketConn
+	reads  atomic.Int64
+	closed atomic.Bool
+}
+
+func (c *failingConn) ReadFrom([]byte) (int, net.Addr, error) {
+	c.reads.Add(1)
+	if c.closed.Load() {
+		return 0, nil, net.ErrClosed
+	}
+	return 0, nil, errors.New("socket failure")
+}
+
+func TestRead_PersistentErrorDoesNotSpin(t *testing.T) {
+	conn := &failingConn{}
+	run := newMappingRun()
+	run.readers.Add(1)
+	go run.read(conn)
+	time.Sleep(50 * time.Millisecond)
+	conn.closed.Store(true)
+	run.readers.Wait()
+
+	if n := conn.reads.Load(); n > 1000 {
+		t.Errorf("%d reads in 50ms, want a paced retry", n)
+	}
+}
+
+// linkLocalSocket returns a UDP socket on a link-local address, or skips where
+// the host has none it can bind.
+func linkLocalSocket(t *testing.T) (*net.UDPConn, net.Interface) {
+	t.Helper()
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		t.Skipf("interfaces: %v", err)
+	}
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok || ipnet.IP.To4() != nil || !ipnet.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			conn, err := net.ListenUDP("udp6", &net.UDPAddr{IP: ipnet.IP, Zone: iface.Name})
+			if err == nil {
+				t.Cleanup(func() { _ = conn.Close() })
+				return conn, iface
+			}
+		}
+	}
+	t.Skip("no bindable link-local address")
+	return nil, net.Interface{}
+}
+
+func TestProbeAll_LinkLocalServerKeepsZone(t *testing.T) {
+	conn, iface := linkLocalSocket(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	go func() { _ = stunserver.New(stunserver.Options{}).Serve(ctx, conn) }()
+	local := conn.LocalAddr().(*net.UDPAddr)
+
+	for _, zone := range []string{iface.Name, strconv.Itoa(iface.Index)} {
+		t.Run(zone, func(t *testing.T) {
+			res := probeOne(ctx, Server{Host: local.IP.String() + "%" + zone, Port: local.Port})
+			if res.Err != nil {
+				t.Fatalf("probe: %v", res.Err)
+			}
+			if res.Target.Addr().Zone() != zone {
+				t.Errorf("Target zone = %q, want %q", res.Target.Addr().Zone(), zone)
+			}
+		})
 	}
 }
 
@@ -219,6 +318,35 @@ func TestProbeAll_ResolveFailure(t *testing.T) {
 	res := probeOne(ctx, Server{Host: "natcheck.invalid", Port: 3478})
 	if res.Err == nil {
 		t.Fatal("expected resolve error, got success")
+	}
+}
+
+func TestResolveHost_LiteralsSkipTheResolver(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, host := range []string{"192.0.2.1", "2001:db8::1", "fe80::1%eth0"} {
+		ips, err := resolveHost(ctx, host)
+		if err != nil {
+			t.Fatalf("resolveHost(%q): %v", host, err)
+		}
+		if len(ips) != 1 || ips[0].String() != host {
+			t.Errorf("resolveHost(%q) = %v", host, ips)
+		}
+	}
+}
+
+func TestComparableEndpoint(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"192.0.2.1:3478", "192.0.2.1:3478"},
+		{"[::ffff:192.0.2.1]:3478", "192.0.2.1:3478"},
+		{"[fe80::1%eth0]:3478", "[fe80::1]:3478"},
+		{"[fe80::1%2]:3478", "[fe80::1]:3478"},
+	}
+	for _, tt := range tests {
+		got := comparableEndpoint(netip.MustParseAddrPort(tt.in))
+		if got.String() != tt.want {
+			t.Errorf("comparableEndpoint(%s) = %s, want %s", tt.in, got, tt.want)
+		}
 	}
 }
 

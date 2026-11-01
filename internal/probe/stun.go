@@ -40,6 +40,8 @@ func (stunProber) ProbeAll(ctx context.Context, servers []Server) []Result {
 	return results
 }
 
+const readErrorPause = 10 * time.Millisecond
+
 type transactionID = [stun.TransactionIDSize]byte
 
 // mappingRun holds the per-family sockets and in-flight transactions of one
@@ -64,6 +66,7 @@ type familySocket struct {
 
 type transaction struct {
 	target netip.AddrPort
+	source netip.AddrPort // target as replies report it; see comparableEndpoint
 	start  time.Time
 	reply  chan transactionReply // buffered; the reader must not block on it
 }
@@ -97,7 +100,7 @@ func (r *mappingRun) probe(ctx context.Context, s Server) Result {
 	if s.Host == "" || s.Port <= 0 || s.Port > 65535 {
 		return Result{Server: s, Err: fmt.Errorf("invalid server %q:%d", s.Host, s.Port)}
 	}
-	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", s.Host)
+	ips, err := resolveHost(ctx, s.Host)
 	if err != nil {
 		return Result{Server: s, Err: fmt.Errorf("resolve %s: %w", s.Host, err)}
 	}
@@ -105,6 +108,15 @@ func (r *mappingRun) probe(ctx context.Context, s Server) Result {
 		return Result{Server: s, Err: fmt.Errorf("resolve %s: no addresses", s.Host)}
 	}
 	return r.probeAddrs(ctx, s, ips)
+}
+
+// resolveHost keeps the zone of a literal address. LookupNetIP strips it, and a
+// link-local address is unroutable without one.
+func resolveHost(ctx context.Context, host string) ([]netip.Addr, error) {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return []netip.Addr{ip}, nil
+	}
+	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }
 
 // probeAddrs uses the first address that accepts a send. A host with an AAAA
@@ -155,7 +167,7 @@ func (r *mappingRun) send(target netip.AddrPort) (*transaction, error) {
 	}
 	req.Encode()
 
-	tx := &transaction{target: target, start: time.Now(), reply: make(chan transactionReply, 1)}
+	tx := &transaction{target: target, source: comparableEndpoint(target), start: time.Now(), reply: make(chan transactionReply, 1)}
 	r.mu.Lock()
 	r.pending[req.TransactionID] = tx
 	r.mu.Unlock()
@@ -197,6 +209,9 @@ func (r *mappingRun) read(conn net.PacketConn) {
 			return
 		}
 		if err != nil {
+			// Stay alive for the probes in flight, but a persistent error must
+			// not spin until the deadline.
+			time.Sleep(readErrorPause)
 			continue
 		}
 		received := time.Now()
@@ -204,9 +219,15 @@ func (r *mappingRun) read(conn net.PacketConn) {
 		if !ok {
 			continue
 		}
-		src := udp.AddrPort()
-		r.deliver(buf[:n], netip.AddrPortFrom(src.Addr().Unmap(), src.Port()), received)
+		r.deliver(buf[:n], comparableEndpoint(udp.AddrPort()), received)
 	}
+}
+
+// comparableEndpoint normalizes an address for source checks. The zone is
+// dropped because a target may name it by index while replies name it by
+// interface, and it adds nothing to a transaction ID match.
+func comparableEndpoint(ap netip.AddrPort) netip.AddrPort {
+	return netip.AddrPortFrom(ap.Addr().Unmap().WithZone(""), ap.Port())
 }
 
 // deliver hands a packet to its transaction, or drops it. Order matters: source
@@ -224,7 +245,7 @@ func (r *mappingRun) deliver(data []byte, src netip.AddrPort, received time.Time
 		return
 	}
 	tx, ok := r.pending[resp.TransactionID]
-	if !ok || tx.target != src {
+	if !ok || tx.source != src {
 		return
 	}
 	delete(r.pending, resp.TransactionID)
@@ -234,7 +255,7 @@ func (r *mappingRun) deliver(data []byte, src netip.AddrPort, received time.Time
 
 func (r *mappingRun) expectsSource(src netip.AddrPort) bool {
 	for _, tx := range r.pending {
-		if tx.target == src {
+		if tx.source == src {
 			return true
 		}
 	}
