@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/1mb-dev/natcheck/internal/stunserver"
+	"github.com/pion/stun/v3"
 )
 
 // corner identifies one of the four §3 listeners.
@@ -347,5 +348,172 @@ func TestProbeFiltering_StalePacketDoesNotPollute(t *testing.T) {
 	}
 	if !res.Test2Received || !res.Test3Received {
 		t.Fatalf("Test2=%v Test3=%v; baseline must be EIF even with noise injection", res.Test2Received, res.Test3Received)
+	}
+}
+
+// startChangeIgnoringServer advertises OTHER-ADDRESS but always replies from its
+// own address. reply decides which requests get an answer.
+func startChangeIgnoringServer(t *testing.T, reply func(req []byte) bool) Server {
+	t.Helper()
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	srv := stunserver.New(stunserver.Options{Other: netip.MustParseAddrPort("198.51.100.1:3479")})
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if !reply(buf[:n]) {
+				continue
+			}
+			udp := from.(*net.UDPAddr)
+			if resp := srv.Handle(buf[:n], udp.AddrPort()); resp != nil {
+				_, _ = conn.WriteTo(resp, from)
+			}
+		}
+	}()
+	return Server{Host: "127.0.0.1", Port: conn.LocalAddr().(*net.UDPAddr).Port}
+}
+
+func TestProbeFiltering_ServerIgnoresChangeRequest(t *testing.T) {
+	tests := []struct {
+		name  string
+		reply func(req []byte) bool
+	}{
+		{"answers every test from its own address", func([]byte) bool { return true }},
+		{"answers only test 3 from its own address", func(req []byte) bool {
+			changeIP, changePort, ok := stunserver.ParseChangeRequest(req)
+			return !ok || (changePort && !changeIP)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := startChangeIgnoringServer(t, tt.reply)
+			res := ProbeFiltering(context.Background(), server, 300*time.Millisecond)
+			if !errors.Is(res.Err, ErrFilteringNotSupported) {
+				t.Fatalf("Err = %v, want ErrFilteringNotSupported; T2=%v T3=%v", res.Err, res.Test2Received, res.Test3Received)
+			}
+			if res.Test2Received || res.Test3Received {
+				t.Errorf("T2=%v T3=%v, want neither counted", res.Test2Received, res.Test3Received)
+			}
+		})
+	}
+}
+
+func TestProbeFiltering_ServerRejectsChangeRequest(t *testing.T) {
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	srv := stunserver.New(stunserver.Options{Other: netip.MustParseAddrPort("198.51.100.1:3479")})
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if _, _, change := stunserver.ParseChangeRequest(buf[:n]); !change {
+				_, _ = conn.WriteTo(srv.Handle(buf[:n], from.(*net.UDPAddr).AddrPort()), from)
+				continue
+			}
+			req := &stun.Message{Raw: append([]byte{}, buf[:n]...)}
+			if req.Decode() != nil {
+				continue
+			}
+			resp, err := stun.Build(stun.NewTransactionIDSetter(req.TransactionID), stun.BindingError)
+			if err == nil {
+				_, _ = conn.WriteTo(resp.Raw, from)
+			}
+		}
+	}()
+
+	server := Server{Host: "127.0.0.1", Port: conn.LocalAddr().(*net.UDPAddr).Port}
+	res := ProbeFiltering(context.Background(), server, 300*time.Millisecond)
+	if !errors.Is(res.Err, ErrFilteringNotSupported) {
+		t.Fatalf("Err = %v, want ErrFilteringNotSupported; T2=%v T3=%v", res.Err, res.Test2Received, res.Test3Received)
+	}
+}
+
+func TestProbeFiltering_Test2ReplyMustChangeIP(t *testing.T) {
+	primary, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = primary.Close() }()
+	altPort, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = altPort.Close() }()
+
+	srv := stunserver.New(stunserver.Options{Other: netip.MustParseAddrPort("198.51.100.1:3479")})
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := primary.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			out := primary
+			if _, _, change := stunserver.ParseChangeRequest(buf[:n]); change {
+				out = altPort
+			}
+			_, _ = out.WriteTo(srv.Handle(buf[:n], from.(*net.UDPAddr).AddrPort()), from)
+		}
+	}()
+
+	server := Server{Host: "127.0.0.1", Port: primary.LocalAddr().(*net.UDPAddr).Port}
+	res := ProbeFiltering(context.Background(), server, 300*time.Millisecond)
+	if !errors.Is(res.Err, ErrFilteringNotSupported) {
+		t.Fatalf("Err = %v, want ErrFilteringNotSupported; T2=%v T3=%v", res.Err, res.Test2Received, res.Test3Received)
+	}
+}
+
+func TestChangeRequestIgnored(t *testing.T) {
+	const (
+		target    = "192.0.2.1:3478"
+		altPort   = "192.0.2.1:3479"
+		altIP     = "198.51.100.1:3479"
+		loopback  = "127.0.0.1:3478"
+		loopOther = "127.0.0.1:3479"
+	)
+	reply := func(source string) *bindingResult {
+		if source == "" {
+			return nil
+		}
+		return &bindingResult{source: netip.MustParseAddrPort(source)}
+	}
+	tests := []struct {
+		name   string
+		target string
+		other  string
+		t2, t3 string
+		want   bool
+	}{
+		{"no replies", target, altIP, "", "", false},
+		{"honored", target, altIP, altIP, altPort, false},
+		{"test 2 from an unadvertised new IP", target, altIP, "203.0.113.9:3479", altPort, false},
+		{"test 2 from the target", target, altIP, target, altPort, true},
+		{"test 2 from the target IP on another port", target, altIP, altPort, altPort, true},
+		{"test 2 from an OTHER-ADDRESS on the target IP", target, altPort, altPort, altPort, true},
+		{"test 3 from the target", target, altIP, "", target, true},
+		{"loopback rig replying from OTHER-ADDRESS", loopback, loopOther, loopOther, "", false},
+		{"loopback reply not from OTHER-ADDRESS", loopback, loopOther, "127.0.0.1:3480", "", true},
+		{"loopback test 3 from the target", loopback, loopOther, loopOther, loopback, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := changeRequestIgnored(netip.MustParseAddrPort(tt.target), netip.MustParseAddrPort(tt.other), reply(tt.t2), reply(tt.t3))
+			if got != tt.want {
+				t.Errorf("changeRequestIgnored = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

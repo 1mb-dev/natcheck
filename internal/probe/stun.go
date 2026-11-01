@@ -265,6 +265,7 @@ func (r *mappingRun) expectsSource(src netip.AddrPort) bool {
 type bindingResult struct {
 	mapped netip.AddrPort
 	other  netip.AddrPort
+	source netip.AddrPort // set by sendBindingAndWait only
 }
 
 // parseBindingSuccess reads the attributes of a decoded response. It knows
