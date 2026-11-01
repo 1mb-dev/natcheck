@@ -140,6 +140,10 @@ func buildResponse(behavior fakeBehavior, req *stun.Message, udp *net.UDPAddr) [
 	}
 }
 
+func probeOne(ctx context.Context, s Server) Result {
+	return NewSTUN().ProbeAll(ctx, []Server{s})[0]
+}
+
 func TestProbe_Success(t *testing.T) {
 	f := newFakeSTUN(t, 0, behaviorNormal)
 	host, port := f.addr()
@@ -147,7 +151,7 @@ func TestProbe_Success(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
-	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	res := probeOne(ctx, Server{Host: host, Port: port})
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)
 	}
@@ -170,7 +174,7 @@ func TestProbe_TimeoutShorterThanResponse(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	res := probeOne(ctx, Server{Host: host, Port: port})
 	elapsed := time.Since(start)
 
 	if res.Err == nil {
@@ -188,7 +192,7 @@ func TestProbe_ServerSilent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	res := probeOne(ctx, Server{Host: host, Port: port})
 	if res.Err == nil {
 		t.Fatal("expected error against silent server, got success")
 	}
@@ -206,9 +210,14 @@ func TestProbe_ServerNotListening(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	res := NewSTUN().Probe(ctx, Server{Host: "127.0.0.1", Port: port})
+	start := time.Now()
+	res := probeOne(ctx, Server{Host: "127.0.0.1", Port: port})
+	elapsed := time.Since(start)
 	if res.Err == nil {
 		t.Fatal("expected error against unlistened port, got success")
+	}
+	if elapsed < 250*time.Millisecond {
+		t.Fatalf("closed port returned after %v; want the context deadline, an unconnected socket gets no refusal", elapsed)
 	}
 }
 
@@ -223,7 +232,7 @@ func TestProbe_MalformedHostPort(t *testing.T) {
 		{Host: "127.0.0.1", Port: 70000},
 	}
 	for _, c := range cases {
-		res := NewSTUN().Probe(ctx, c)
+		res := probeOne(ctx, c)
 		if res.Err == nil {
 			t.Fatalf("expected error for %+v, got success", c)
 		}
@@ -240,7 +249,7 @@ func TestProbe_WrongTransactionID(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	res := probeOne(ctx, Server{Host: host, Port: port})
 	if res.Err == nil {
 		t.Fatal("expected error on transaction-ID mismatch, got success")
 	}
@@ -253,7 +262,7 @@ func TestProbe_WrongMessageType(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	res := probeOne(ctx, Server{Host: host, Port: port})
 	if res.Err == nil {
 		t.Fatal("expected error on unexpected STUN message type, got success")
 	}
@@ -266,7 +275,7 @@ func TestProbe_MissingMappedAddress(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	res := probeOne(ctx, Server{Host: host, Port: port})
 	if res.Err == nil {
 		t.Fatal("expected error on missing XOR-MAPPED-ADDRESS, got success")
 	}
@@ -288,7 +297,7 @@ func TestProbe_OtherAddressExtracted(t *testing.T) {
 	port := conn.LocalAddr().(*net.UDPAddr).Port
 	probeCtx, probeCancel := context.WithTimeout(context.Background(), time.Second)
 	defer probeCancel()
-	res := NewSTUN().Probe(probeCtx, Server{Host: "127.0.0.1", Port: port})
+	res := probeOne(probeCtx, Server{Host: "127.0.0.1", Port: port})
 	if res.Err != nil {
 		t.Fatalf("probe: %v", res.Err)
 	}
@@ -343,7 +352,7 @@ func TestProbe_OtherAddressIPv4MappedUnmapped(t *testing.T) {
 
 	probeCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	res := NewSTUN().Probe(probeCtx, Server{Host: "127.0.0.1", Port: port})
+	res := probeOne(probeCtx, Server{Host: "127.0.0.1", Port: port})
 	if res.Err != nil {
 		t.Fatalf("probe: %v", res.Err)
 	}
@@ -364,7 +373,7 @@ func TestProbe_OtherAddressAbsent(t *testing.T) {
 	host, port := f.addr()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	res := probeOne(ctx, Server{Host: host, Port: port})
 	if res.Err != nil {
 		t.Fatalf("probe: %v", res.Err)
 	}
@@ -380,7 +389,7 @@ func TestProbe_GarbledResponse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	res := NewSTUN().Probe(ctx, Server{Host: host, Port: port})
+	res := probeOne(ctx, Server{Host: host, Port: port})
 	if res.Err == nil {
 		t.Fatal("expected error on garbled response, got success")
 	}
