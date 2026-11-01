@@ -207,16 +207,16 @@ func TestProbe_ServerNotListening(t *testing.T) {
 	port := conn.LocalAddr().(*net.UDPAddr).Port
 	_ = conn.Close()
 
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
-	start := time.Now()
 	res := probeOne(ctx, Server{Host: "127.0.0.1", Port: port})
 	elapsed := time.Since(start)
 	if res.Err == nil {
 		t.Fatal("expected error against unlistened port, got success")
 	}
-	if elapsed < 250*time.Millisecond {
+	if elapsed < 300*time.Millisecond {
 		t.Fatalf("closed port returned after %v; want the context deadline, an unconnected socket gets no refusal", elapsed)
 	}
 }
