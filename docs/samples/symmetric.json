@@ -1,0 +1,29 @@
+{
+  "nat_type": "ADM",
+  "nat_type_legacy": "symmetric",
+  "public_endpoint": "203.0.113.2:17861",
+  "probes": [
+    {
+      "server": "198.51.100.11:3478",
+      "rtt_ms": 2,
+      "mapped": "203.0.113.2:17861"
+    },
+    {
+      "server": "198.51.100.12:3478",
+      "rtt_ms": 2,
+      "mapped": "203.0.113.2:33098"
+    }
+  ],
+  "webrtc_forecast": {
+    "direct_p2p": "unlikely",
+    "turn_required": true
+  },
+  "warnings": [
+    "adm_or_stricter"
+  ],
+  "filtering": {
+    "behavior": "address-and-port-dependent",
+    "tested_against": "198.51.100.11:3478"
+  },
+  "hairpinning": false
+}

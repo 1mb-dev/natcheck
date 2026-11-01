@@ -1,0 +1,29 @@
+{
+  "nat_type": "ADM",
+  "nat_type_legacy": "symmetric",
+  "public_endpoint": "203.0.113.45:29314",
+  "probes": [
+    {
+      "server": "74.125.250.129:19302",
+      "rtt_ms": 48,
+      "mapped": "203.0.113.45:29314"
+    },
+    {
+      "server": "162.159.207.0:3478",
+      "rtt_ms": 36,
+      "mapped": "203.0.113.45:10589"
+    }
+  ],
+  "webrtc_forecast": {
+    "direct_p2p": "unlikely",
+    "turn_required": true
+  },
+  "warnings": [
+    "filtering_behavior_not_tested",
+    "adm_or_stricter"
+  ],
+  "filtering": {
+    "behavior": "untested"
+  },
+  "hairpinning": false
+}

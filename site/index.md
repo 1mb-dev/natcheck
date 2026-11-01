@@ -6,9 +6,10 @@ A STUN-based NAT diagnostic with a WebRTC direct-P2P forecast.
 
 ```
 $ natcheck
-Direct P2P: likely
+Direct P2P: possible
 NAT type: Endpoint-Independent Mapping (cone)
 Public endpoint: 203.0.113.45:51820
+Hairpinning: false
 
 Probes:
   stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
