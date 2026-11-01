@@ -22,7 +22,8 @@ type stunProber struct{}
 // ProbeAll sends one STUN Binding request to each server, concurrently, and
 // returns results in input order. Servers in the same address family share one
 // local socket: mapped endpoints are only comparable when they come from the
-// same local endpoint. One-shot: no retransmissions. ctx bounds the whole run.
+// same local endpoint. Unanswered requests are retransmitted on the
+// retransmitGaps schedule. ctx bounds the whole run.
 func (stunProber) ProbeAll(ctx context.Context, servers []Server) []Result {
 	run := newMappingRun()
 	defer run.close()
@@ -41,6 +42,12 @@ func (stunProber) ProbeAll(ctx context.Context, servers []Server) []Result {
 }
 
 const readErrorPause = 10 * time.Millisecond
+
+// retransmitGaps is the wait before each retransmission, giving sends at 0,
+// 0.5, 1.5 and 3.5s (RFC 8489 §6.2.1 with RTO 500ms). One lost packet otherwise
+// leaves a family with a single probe, which reads Unknown and exits 1, so a
+// healthy network's exit code would flap with packet loss.
+var retransmitGaps = []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
 
 type transactionID = [stun.TransactionIDSize]byte
 
@@ -67,7 +74,9 @@ type familySocket struct {
 type transaction struct {
 	target netip.AddrPort
 	source netip.AddrPort // target as replies report it; see comparableEndpoint
-	start  time.Time
+	conn   net.PacketConn
+	raw    []byte
+	start  time.Time             // first send, so RTT includes any retransmission wait
 	reply  chan transactionReply // buffered; the reader must not block on it
 }
 
@@ -139,21 +148,41 @@ func (r *mappingRun) probeAddrs(ctx context.Context, s Server, ips []netip.Addr)
 	res.Err = nil
 	res.Target = tx.target
 
-	select {
-	case reply := <-tx.reply:
-		if reply.err != nil {
-			res.Err = reply.err
-			return res
-		}
+	reply, err := tx.await(ctx)
+	switch {
+	case err != nil:
+		// An unconnected socket gets no ICMP errors, so a closed port shows up
+		// here, at the deadline, rather than as an immediate refusal.
+		res.Err = fmt.Errorf("no response from %s: %w", tx.target, err)
+	case reply.err != nil:
+		res.Err = reply.err
+	default:
 		res.Mapped = reply.binding.mapped
 		res.Other = reply.binding.other
 		res.RTT = reply.rtt
-	case <-ctx.Done():
-		// An unconnected socket gets no ICMP errors, so a closed port shows up
-		// here, at the deadline, rather than as an immediate refusal.
-		res.Err = fmt.Errorf("no response from %s: %w", tx.target, ctx.Err())
 	}
 	return res
+}
+
+// await resends the same request, keeping the transaction ID, so a reply to any
+// send completes the transaction.
+func (tx *transaction) await(ctx context.Context) (transactionReply, error) {
+	for _, gap := range retransmitGaps {
+		select {
+		case reply := <-tx.reply:
+			return reply, nil
+		case <-ctx.Done():
+			return transactionReply{}, ctx.Err()
+		case <-time.After(gap):
+			_, _ = tx.conn.WriteTo(tx.raw, net.UDPAddrFromAddrPort(tx.target))
+		}
+	}
+	select {
+	case reply := <-tx.reply:
+		return reply, nil
+	case <-ctx.Done():
+		return transactionReply{}, ctx.Err()
+	}
 }
 
 func (r *mappingRun) send(target netip.AddrPort) (*transaction, error) {
@@ -167,7 +196,14 @@ func (r *mappingRun) send(target netip.AddrPort) (*transaction, error) {
 	}
 	req.Encode()
 
-	tx := &transaction{target: target, source: comparableEndpoint(target), start: time.Now(), reply: make(chan transactionReply, 1)}
+	tx := &transaction{
+		target: target,
+		source: comparableEndpoint(target),
+		conn:   conn,
+		raw:    req.Raw,
+		start:  time.Now(),
+		reply:  make(chan transactionReply, 1),
+	}
 	r.mu.Lock()
 	r.pending[req.TransactionID] = tx
 	r.mu.Unlock()

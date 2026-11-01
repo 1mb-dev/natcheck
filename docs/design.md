@@ -180,11 +180,11 @@ type Result struct {
 }
 
 type Prober interface {
-    Probe(ctx context.Context, s Server) Result
+    ProbeAll(ctx context.Context, servers []Server) []Result
 }
 ```
 
-One `Prober` implementation: `stunProber` using `pion/stun` primitives (`Build`/`Decode`) over raw UDP. Cancellation is bridged via `conn.SetDeadline` from `ctx.Done`. Returns zero-value `Result` with non-nil `Err` on failure; callers never panic. One-shot — no retransmission; the caller's timeout is the retry budget.
+One `Prober` implementation: `stunProber` using `pion/stun` primitives (`Build`/`Decode`) over raw UDP. Servers in one address family share one local socket, because mapped endpoints are only comparable from the same local endpoint. Requests go out concurrently and replies are matched by source and transaction ID; anything else is dropped. Unanswered requests are retransmitted at 0.5, 1.5 and 3.5s under the `ctx` deadline. Failures return a `Result` with non-nil `Err`; callers never panic.
 
 ### `internal/classify`
 
