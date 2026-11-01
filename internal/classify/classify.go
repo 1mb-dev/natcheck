@@ -414,12 +414,14 @@ func decideForecast(v Verdict) Forecast {
 	case Unknown:
 		return Forecast{DirectP2P: "unknown", TURNRequired: false}
 	case EndpointIndependentMapping:
-		switch v.Filtering {
-		case FilteringAddressDependent, FilteringAddressAndPortDependent:
-			return Forecast{DirectP2P: "possible", TURNRequired: false}
-		default:
+		// Untested filtering must not read stronger than measured strict
+		// filtering: the same router would otherwise improve by being measured
+		// less. Most public STUN servers cannot measure it, so this is what
+		// default-server runs get.
+		if v.Filtering == FilteringEndpointIndependent {
 			return Forecast{DirectP2P: "likely", TURNRequired: false}
 		}
+		return Forecast{DirectP2P: "possible", TURNRequired: false}
 	default:
 		return Forecast{DirectP2P: "unknown", TURNRequired: false}
 	}
