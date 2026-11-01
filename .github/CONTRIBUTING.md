@@ -10,7 +10,7 @@ cd natcheck
 make build     # or: go build ./...
 ```
 
-Requirements: Go 1.25+, [golangci-lint](https://golangci-lint.run/) v2.9.0+ for linting.
+Requirements: Go 1.26+, [golangci-lint](https://golangci-lint.run/) v2.9.0+ for linting.
 
 ## Test
 
