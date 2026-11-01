@@ -21,7 +21,7 @@ brew tap 1mb-dev/tap
 brew install natcheck
 ```
 
-**Go install (any platform with Go 1.25+):**
+**Go install (any platform with Go 1.26+):**
 
 ```bash
 go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
