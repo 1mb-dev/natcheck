@@ -66,8 +66,7 @@ CGNAT behaviour varies by carrier. Some run permissive EIM CGNATs that hole-punc
 [natcheck](https://github.com/1mb-dev/natcheck) runs this probe and reports a direct-P2P forecast with exit codes a CI job can act on. Any STUN client plus the steps above works if you prefer to do it by hand.
 
 ```bash
-brew tap 1mb-dev/tap
-brew install natcheck
+brew install 1mb-dev/tap/natcheck
 natcheck
 ```
 
