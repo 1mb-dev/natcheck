@@ -349,3 +349,57 @@ func TestProbeFiltering_StalePacketDoesNotPollute(t *testing.T) {
 		t.Fatalf("Test2=%v Test3=%v; baseline must be EIF even with noise injection", res.Test2Received, res.Test3Received)
 	}
 }
+
+// startChangeIgnoringServer advertises OTHER-ADDRESS but always replies from its
+// own address. reply decides which requests get an answer.
+func startChangeIgnoringServer(t *testing.T, reply func(req []byte) bool) Server {
+	t.Helper()
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	srv := stunserver.New(stunserver.Options{Other: netip.MustParseAddrPort("198.51.100.1:3479")})
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			if !reply(buf[:n]) {
+				continue
+			}
+			udp := from.(*net.UDPAddr)
+			if resp := srv.Handle(buf[:n], udp.AddrPort()); resp != nil {
+				_, _ = conn.WriteTo(resp, from)
+			}
+		}
+	}()
+	return Server{Host: "127.0.0.1", Port: conn.LocalAddr().(*net.UDPAddr).Port}
+}
+
+func TestProbeFiltering_ServerIgnoresChangeRequest(t *testing.T) {
+	tests := []struct {
+		name  string
+		reply func(req []byte) bool
+	}{
+		{"answers every test from its own address", func([]byte) bool { return true }},
+		{"answers only test 3 from its own address", func(req []byte) bool {
+			changeIP, changePort, ok := stunserver.ParseChangeRequest(req)
+			return !ok || (changePort && !changeIP)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := startChangeIgnoringServer(t, tt.reply)
+			res := ProbeFiltering(context.Background(), server, 300*time.Millisecond)
+			if !errors.Is(res.Err, ErrFilteringNotSupported) {
+				t.Fatalf("Err = %v, want ErrFilteringNotSupported; T2=%v T3=%v", res.Err, res.Test2Received, res.Test3Received)
+			}
+			if res.Test2Received || res.Test3Received {
+				t.Errorf("T2=%v T3=%v, want neither counted", res.Test2Received, res.Test3Received)
+			}
+		})
+	}
+}

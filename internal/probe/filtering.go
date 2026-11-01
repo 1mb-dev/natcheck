@@ -14,8 +14,8 @@ import (
 )
 
 // FilteringResult captures the outcome of an RFC 5780 §4.4 three-step
-// filtering classification. Test1Other.IsValid() == false means the server
-// did not advertise OTHER-ADDRESS; in that case Test2Received and
+// filtering classification. When the server cannot run the sequence, because it
+// advertised no OTHER-ADDRESS or it ignored CHANGE-REQUEST, Test2Received and
 // Test3Received are both false and Err wraps ErrFilteringNotSupported.
 //
 // Server is the target of the §4.4 sequence (echoed from the ProbeFiltering
@@ -30,9 +30,9 @@ type FilteringResult struct {
 }
 
 // ErrFilteringNotSupported is returned in FilteringResult.Err when the target
-// server's BindingResponse does not include an OTHER-ADDRESS attribute, so the
-// §4.4 sequence cannot be attempted.
-var ErrFilteringNotSupported = errors.New("server did not advertise OTHER-ADDRESS")
+// server cannot run the §4.4 sequence: it advertised no OTHER-ADDRESS, or it
+// answered a CHANGE-REQUEST from the address the request was sent to.
+var ErrFilteringNotSupported = errors.New("server does not support RFC 5780 CHANGE-REQUEST")
 
 // ErrTest1Failed wraps the underlying transport / parse error from the initial
 // Binding probe. The §4.4 sequence is skipped when this error is returned.
@@ -69,9 +69,12 @@ func ProbeFiltering(ctx context.Context, server Server, timeout time.Duration) F
 		res.Err = fmt.Errorf("resolve %s: no addresses", server.Host)
 		return res
 	}
-	remote := &net.UDPAddr{IP: net.IP(ips[0].Unmap().AsSlice()), Port: server.Port}
+	ip := ips[0].Unmap()
+	target := netip.AddrPortFrom(ip, uint16(server.Port))
+	remote := net.UDPAddrFromAddrPort(target)
 
-	conn, err := net.ListenPacket("udp", ":0")
+	network, listenAddr := pickNetwork(ip)
+	conn, err := net.ListenPacket(network, listenAddr)
 	if err != nil {
 		res.Err = fmt.Errorf("listen %s: %w", hostport, err)
 		return res
@@ -99,10 +102,19 @@ func ProbeFiltering(ctx context.Context, server Server, timeout time.Duration) F
 
 	// Test 2: CHANGE-IP|CHANGE-PORT.
 	t2, _ := sendBindingAndWait(conn, remote, perTest, &changeRequestPayload{ip: true, port: true})
-	res.Test2Received = t2 != nil
 
 	// Test 3: CHANGE-PORT.
 	t3, _ := sendBindingAndWait(conn, remote, perTest, &changeRequestPayload{ip: false, port: true})
+
+	// Compare to the target, not OTHER-ADDRESS: provider topologies can reply
+	// from an address other than the advertised one, and that must not read as
+	// stricter filtering. Only a reply from the target itself proves the request
+	// was ignored, in which case neither test measured anything.
+	if (t2 != nil && t2.source == target) || (t3 != nil && t3.source == target) {
+		res.Err = ErrFilteringNotSupported
+		return res
+	}
+	res.Test2Received = t2 != nil
 	res.Test3Received = t3 != nil
 
 	return res
@@ -119,7 +131,8 @@ type changeRequestPayload struct {
 // errNoResponse if the deadline expires with no matching reply. Discards
 // stale packets with non-matching transaction IDs (e.g., late responses from
 // a prior test) and keeps reading until either a matching response, deadline
-// expiry, or fatal socket error.
+// expiry, or fatal socket error. The result records the reply's source; judging
+// it is the caller's job.
 func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Duration, change *changeRequestPayload) (*bindingResult, error) {
 	setters := []stun.Setter{stun.TransactionID, stun.BindingRequest}
 	if change != nil {
@@ -147,7 +160,7 @@ func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Dura
 		if err := conn.SetReadDeadline(end); err != nil {
 			return nil, fmt.Errorf("set read deadline: %w", err)
 		}
-		n, _, err := conn.ReadFrom(buf)
+		n, from, err := conn.ReadFrom(buf)
 		if err != nil {
 			// Deadline reached or fatal error.
 			return nil, errNoResponse
@@ -161,6 +174,14 @@ func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Dura
 			// Stale response from a prior test; discard and keep reading.
 			continue
 		}
-		return parseBindingSuccess(resp)
+		out, err := parseBindingSuccess(resp)
+		if err != nil {
+			return nil, err
+		}
+		if udp, ok := from.(*net.UDPAddr); ok {
+			src := udp.AddrPort()
+			out.source = netip.AddrPortFrom(src.Addr().Unmap(), src.Port())
+		}
+		return out, nil
 	}
 }

@@ -29,7 +29,7 @@ func warningText(id string) string {
 	case classify.WarnFilteringBehaviorNotTested:
 		return "Filtering not tested."
 	case classify.WarnFilteringSkippedNoChangeRequest:
-		return "Filtering skipped: server does not advertise OTHER-ADDRESS."
+		return "Filtering skipped: server does not support RFC 5780 CHANGE-REQUEST."
 	case classify.WarnCGNATDetected:
 		return "CGNAT detected (IP in 100.64.0.0/10)."
 	case classify.WarnADMOrStricter:

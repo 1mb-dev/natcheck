@@ -110,7 +110,7 @@ type Verdict struct {
 	// Zero-value (Server{}) when Filtering == FilteringUntested, which
 	// happens in any of these cases:
 	//   - no FilteringResult was supplied (filtering not attempted);
-	//   - the server did not advertise OTHER-ADDRESS (ErrFilteringNotSupported);
+	//   - the server cannot run the sequence (ErrFilteringNotSupported);
 	//   - the initial Test 1 binding probe failed (ErrTest1Failed);
 	//   - the (T2=true, T3=false) RFC-impossible state was observed.
 	FilteringTestedAgainst probe.Server
