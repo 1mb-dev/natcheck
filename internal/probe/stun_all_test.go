@@ -387,3 +387,59 @@ func TestPickNetwork(t *testing.T) {
 		})
 	}
 }
+
+func TestProbeAll_RetransmitsAfterLoss(t *testing.T) {
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	ids := make(chan transactionID, 2)
+	go func() {
+		buf := make([]byte, 1500)
+		for first := true; ; first = false {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			req := &stun.Message{Raw: append([]byte{}, buf[:n]...)}
+			if req.Decode() != nil {
+				return
+			}
+			ids <- req.TransactionID
+			if !first {
+				_, _ = conn.WriteTo(buildResponse(behaviorNormal, req, from.(*net.UDPAddr)), from)
+				return
+			}
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	res := probeOne(ctx, Server{Host: "127.0.0.1", Port: conn.LocalAddr().(*net.UDPAddr).Port})
+	if res.Err != nil {
+		t.Fatalf("lost first request cost the verdict: %v", res.Err)
+	}
+	if first, second := <-ids, <-ids; first != second {
+		t.Errorf("retransmission changed the transaction ID: %x then %x", first, second)
+	}
+	if res.RTT < retransmitGaps[0] {
+		t.Errorf("RTT = %v, want at least the first gap %v", res.RTT, retransmitGaps[0])
+	}
+}
+
+func TestProbeAll_SilentServerStaysBoundedByContext(t *testing.T) {
+	f := newFakeSTUN(t, 0, behaviorDrop)
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	res := probeOne(ctx, fakeServer(f))
+	if res.Err == nil {
+		t.Fatal("expected error against silent server, got success")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Errorf("elapsed = %v, want the 700ms deadline to stop the 3.5s retransmit schedule", elapsed)
+	}
+}
