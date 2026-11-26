@@ -85,6 +85,11 @@ func newFakeFilteringServer(t *testing.T, dropFrom ...corner) *fakeFilteringServ
 	return f
 }
 
+// probeFiltering runs ProbeFiltering on s, which must name a literal IP.
+func probeFiltering(s Server, timeout time.Duration) FilteringResult {
+	return ProbeFiltering(s, netip.AddrPortFrom(netip.MustParseAddr(s.Host), uint16(s.Port)), timeout)
+}
+
 func (f *fakeFilteringServer) primaryServer() Server {
 	return Server{Host: "127.0.0.1", Port: int(f.addrs[cornerPrimary].Port())}
 }
@@ -218,7 +223,7 @@ func altIPAltPortFrom(c corner) corner {
 
 func TestProbeFiltering_EndpointIndependent(t *testing.T) {
 	f := newFakeFilteringServer(t) // no drops
-	res := ProbeFiltering(context.Background(), f.primaryServer(), 2*time.Second)
+	res := probeFiltering(f.primaryServer(), 2*time.Second)
 	if res.Err != nil {
 		t.Fatalf("Err = %v, want nil", res.Err)
 	}
@@ -233,7 +238,7 @@ func TestProbeFiltering_EndpointIndependent(t *testing.T) {
 func TestProbeFiltering_AddressDependent(t *testing.T) {
 	// Drop responses from the alt-IP+alt-port corner (Test 2's target).
 	f := newFakeFilteringServer(t, cornerAltBoth)
-	res := ProbeFiltering(context.Background(), f.primaryServer(), 2*time.Second)
+	res := probeFiltering(f.primaryServer(), 2*time.Second)
 	if res.Err != nil {
 		t.Fatalf("Err = %v, want nil", res.Err)
 	}
@@ -247,7 +252,7 @@ func TestProbeFiltering_AddressDependent(t *testing.T) {
 
 func TestProbeFiltering_AddressAndPortDependent(t *testing.T) {
 	f := newFakeFilteringServer(t, cornerAltBoth, cornerAltPort)
-	res := ProbeFiltering(context.Background(), f.primaryServer(), 2*time.Second)
+	res := probeFiltering(f.primaryServer(), 2*time.Second)
 	if res.Err != nil {
 		t.Fatalf("Err = %v, want nil", res.Err)
 	}
@@ -268,7 +273,7 @@ func TestProbeFiltering_NoOtherAddress(t *testing.T) {
 	go func() { _ = stunserver.New(stunserver.Options{}).Serve(ctx, conn) }()
 	port := conn.LocalAddr().(*net.UDPAddr).Port
 
-	res := ProbeFiltering(context.Background(), Server{Host: "127.0.0.1", Port: port}, time.Second)
+	res := probeFiltering(Server{Host: "127.0.0.1", Port: port}, time.Second)
 	if !errors.Is(res.Err, ErrFilteringNotSupported) {
 		t.Fatalf("Err = %v, want ErrFilteringNotSupported", res.Err)
 	}
@@ -286,16 +291,21 @@ func TestProbeFiltering_Test1Failed(t *testing.T) {
 	port := conn.LocalAddr().(*net.UDPAddr).Port
 	_ = conn.Close()
 
-	res := ProbeFiltering(context.Background(), Server{Host: "127.0.0.1", Port: port}, 200*time.Millisecond)
+	res := probeFiltering(Server{Host: "127.0.0.1", Port: port}, 200*time.Millisecond)
 	if !errors.Is(res.Err, ErrTest1Failed) {
 		t.Fatalf("Err = %v, want ErrTest1Failed", res.Err)
 	}
 }
 
-func TestProbeFiltering_InvalidServer(t *testing.T) {
-	res := ProbeFiltering(context.Background(), Server{Host: "", Port: 3478}, time.Second)
-	if res.Err == nil {
-		t.Fatal("expected error for empty host")
+func TestProbeFiltering_InvalidTarget(t *testing.T) {
+	for _, target := range []netip.AddrPort{
+		{},
+		netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0),
+	} {
+		res := ProbeFiltering(Server{Host: "h", Port: 3478}, target, time.Second)
+		if res.Err == nil || errors.Is(res.Err, ErrTest1Failed) {
+			t.Errorf("target %v: Err = %v, want rejection before any send", target, res.Err)
+		}
 	}
 }
 
@@ -303,30 +313,13 @@ func TestProbeFiltering_ZeroTimeoutFallsBack(t *testing.T) {
 	// timeout=0 must not hang; sendBindingAndWait falls back to 500ms per test.
 	f := newFakeFilteringServer(t)
 	start := time.Now()
-	res := ProbeFiltering(context.Background(), f.primaryServer(), 0)
+	res := probeFiltering(f.primaryServer(), 0)
 	if res.Err != nil {
 		t.Fatalf("Err = %v, want nil", res.Err)
 	}
 	// Worst case: 3 tests × 500ms each = 1.5s; loopback should be much faster.
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("elapsed %v exceeds fallback budget", elapsed)
-	}
-}
-
-func TestProbeFiltering_CtxCancelAfterDial(t *testing.T) {
-	// Per godoc: ctx governs dial only. A cancel after dial does NOT abort.
-	f := newFakeFilteringServer(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancelled := make(chan struct{})
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		cancel()
-		close(cancelled)
-	}()
-	res := ProbeFiltering(ctx, f.primaryServer(), 2*time.Second)
-	<-cancelled
-	if res.Err != nil {
-		t.Fatalf("Err = %v; ctx cancellation after dial must not abort", res.Err)
 	}
 }
 
@@ -342,7 +335,7 @@ func TestProbeFiltering_StalePacketDoesNotPollute(t *testing.T) {
 	// real response.
 	f := newFakeFilteringServer(t)
 	f.setNoiseAfter(2)
-	res := ProbeFiltering(context.Background(), f.primaryServer(), 2*time.Second)
+	res := probeFiltering(f.primaryServer(), 2*time.Second)
 	if res.Err != nil {
 		t.Fatalf("Err = %v", res.Err)
 	}
@@ -394,7 +387,7 @@ func TestProbeFiltering_ServerIgnoresChangeRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			server := startChangeIgnoringServer(t, tt.reply)
-			res := ProbeFiltering(context.Background(), server, 300*time.Millisecond)
+			res := probeFiltering(server, 300*time.Millisecond)
 			if !errors.Is(res.Err, ErrFilteringNotSupported) {
 				t.Fatalf("Err = %v, want ErrFilteringNotSupported; T2=%v T3=%v", res.Err, res.Test2Received, res.Test3Received)
 			}
@@ -435,7 +428,7 @@ func TestProbeFiltering_ServerRejectsChangeRequest(t *testing.T) {
 	}()
 
 	server := Server{Host: "127.0.0.1", Port: conn.LocalAddr().(*net.UDPAddr).Port}
-	res := ProbeFiltering(context.Background(), server, 300*time.Millisecond)
+	res := probeFiltering(server, 300*time.Millisecond)
 	if !errors.Is(res.Err, ErrFilteringNotSupported) {
 		t.Fatalf("Err = %v, want ErrFilteringNotSupported; T2=%v T3=%v", res.Err, res.Test2Received, res.Test3Received)
 	}
@@ -470,7 +463,7 @@ func TestProbeFiltering_Test2ReplyMustChangeIP(t *testing.T) {
 	}()
 
 	server := Server{Host: "127.0.0.1", Port: primary.LocalAddr().(*net.UDPAddr).Port}
-	res := ProbeFiltering(context.Background(), server, 300*time.Millisecond)
+	res := probeFiltering(server, 300*time.Millisecond)
 	if !errors.Is(res.Err, ErrFilteringNotSupported) {
 		t.Fatalf("Err = %v, want ErrFilteringNotSupported; T2=%v T3=%v", res.Err, res.Test2Received, res.Test3Received)
 	}

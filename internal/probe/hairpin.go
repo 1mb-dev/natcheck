@@ -60,66 +60,126 @@ type hairpinSender func(ctx context.Context, from net.PacketConn, to netip.AddrP
 type hairpinReceiver func(ctx context.Context, on net.PacketConn, tag []byte, timeout time.Duration) (bool, error)
 
 func probeHairpinning(ctx context.Context, server Server, timeout time.Duration, send hairpinSender, recv hairpinReceiver) HairpinningResult {
-	res := HairpinningResult{Server: server}
 	if server.Host == "" || server.Port <= 0 || server.Port > 65535 {
-		res.Err = fmt.Errorf("invalid server %q:%d", server.Host, server.Port)
-		return res
+		return HairpinningResult{Server: server, Err: fmt.Errorf("invalid server %q:%d", server.Host, server.Port)}
 	}
-
-	var resolver net.Resolver
-	ips, err := resolver.LookupNetIP(ctx, "ip", server.Host)
+	ips, err := resolveHost(ctx, server.Host)
 	if err != nil {
-		res.Err = fmt.Errorf("resolve %s: %w", server.Host, err)
-		return res
+		return HairpinningResult{Server: server, Err: fmt.Errorf("resolve %s: %w", server.Host, err)}
 	}
 	if len(ips) == 0 {
-		res.Err = fmt.Errorf("resolve %s: no addresses", server.Host)
-		return res
+		return HairpinningResult{Server: server, Err: fmt.Errorf("resolve %s: no addresses", server.Host)}
 	}
-	ip := ips[0].Unmap()
-	remote := &net.UDPAddr{IP: net.IP(ip.AsSlice()), Port: server.Port}
+	return hairpinAddrs(ctx, server, ips, timeout, net.ListenPacket, send, recv)
+}
 
-	network, listenAddr := pickNetwork(ip)
-
-	connA, err := net.ListenPacket(network, listenAddr)
-	if err != nil {
-		res.Err = fmt.Errorf("listen socket A: %w", err)
-		return res
-	}
-	defer func() { _ = connA.Close() }()
-
-	connB, err := net.ListenPacket(network, listenAddr)
-	if err != nil {
-		res.Err = fmt.Errorf("listen socket B: %w", err)
-		return res
-	}
-	defer func() { _ = connB.Close() }()
-
-	// Bridge ctx.Done() to both sockets' deadlines so a cancel-without-
-	// deadline context unblocks in-flight reads/writes promptly. The deferred
-	// close(done) fires before the conn.Close() defers (LIFO), so the goroutine
-	// exits cleanly on the success path.
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = connA.SetDeadline(time.Unix(1, 0))
-			_ = connB.SetDeadline(time.Unix(1, 0))
-		case <-done:
-		}
-	}()
+// hairpinAddrs uses the first address whose sockets bind and send, as
+// probeAddrs does for the mapping probe. Silence does not fall through: it has
+// already spent the probe's wait. Nothing falls through once ctx is done.
+func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout time.Duration,
+	listen func(network, address string) (net.PacketConn, error), send hairpinSender, recv hairpinReceiver) HairpinningResult {
+	res := HairpinningResult{Server: server}
 
 	perProbe := timeout / 2
 	if perProbe <= 0 || perProbe > 500*time.Millisecond {
 		perProbe = 500 * time.Millisecond
 	}
 
+	var pair *hairpinPair
+	var mappedB netip.AddrPort
+	for i, ip := range ips {
+		if i > 0 && ctx.Err() != nil {
+			res.Err = fmt.Errorf("%w: %w", ctx.Err(), res.Err)
+			return res
+		}
+		ip = ip.Unmap()
+		p, err := listenPair(ctx, ip, listen)
+		if err != nil {
+			res.Err = err
+			continue
+		}
+		mappedB, err = p.mappedB(net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, uint16(server.Port))), perProbe)
+		if err == nil {
+			pair = p
+			break
+		}
+		p.close()
+		res.Err = err
+		if !errors.Is(err, errSendFailed) {
+			return res
+		}
+	}
+	if pair == nil {
+		return res
+	}
+	defer pair.close()
+	res.Err = nil
+
+	tag := make([]byte, 16)
+	if _, err := rand.Read(tag); err != nil {
+		res.Err = fmt.Errorf("generate hairpin tag: %w", err)
+		return res
+	}
+
+	if err := send(ctx, pair.a, mappedB, tag); err != nil {
+		res.Err = fmt.Errorf("hairpin send A→mB: %w", err)
+		return res
+	}
+
+	arrived, err := recv(ctx, pair.b, tag, timeout)
+	if err != nil {
+		res.Err = fmt.Errorf("hairpin listen on B: %w", err)
+		return res
+	}
+	res.Detected = &arrived
+	return res
+}
+
+// hairpinPair is sockets A and B in one address family.
+type hairpinPair struct {
+	a, b net.PacketConn
+	done chan struct{}
+}
+
+// listenPair binds both sockets and bridges ctx.Done() to their deadlines, so
+// a cancel-without-deadline context unblocks in-flight reads and writes
+// promptly.
+func listenPair(ctx context.Context, ip netip.Addr, listen func(network, address string) (net.PacketConn, error)) (*hairpinPair, error) {
+	network, listenAddr := pickNetwork(ip)
+	a, err := listen(network, listenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("listen socket A: %w", err)
+	}
+	b, err := listen(network, listenAddr)
+	if err != nil {
+		_ = a.Close()
+		return nil, fmt.Errorf("listen socket B: %w", err)
+	}
+	p := &hairpinPair{a: a, b: b, done: make(chan struct{})}
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = a.SetDeadline(time.Unix(1, 0))
+			_ = b.SetDeadline(time.Unix(1, 0))
+		case <-p.done:
+		}
+	}()
+	return p, nil
+}
+
+// close stops the ctx bridge before closing the sockets.
+func (p *hairpinPair) close() {
+	close(p.done)
+	_ = p.a.Close()
+	_ = p.b.Close()
+}
+
+// mappedB STUN-probes both sockets in parallel and returns B's mapped endpoint.
+func (p *hairpinPair) mappedB(remote net.Addr, perProbe time.Duration) (netip.AddrPort, error) {
 	type probeOut struct {
 		mapped netip.AddrPort
 		err    error
 	}
-	aCh, bCh := make(chan probeOut, 1), make(chan probeOut, 1)
 	probeSocket := func(c net.PacketConn, ch chan<- probeOut) {
 		r, err := sendBindingAndWait(c, remote, perProbe, nil)
 		if err != nil {
@@ -128,40 +188,20 @@ func probeHairpinning(ctx context.Context, server Server, timeout time.Duration,
 		}
 		ch <- probeOut{mapped: r.mapped}
 	}
-	go probeSocket(connA, aCh)
-	go probeSocket(connB, bCh)
+	aCh, bCh := make(chan probeOut, 1), make(chan probeOut, 1)
+	go probeSocket(p.a, aCh)
+	go probeSocket(p.b, bCh)
 	aRes, bRes := <-aCh, <-bCh
 	if aRes.err != nil {
-		res.Err = fmt.Errorf("STUN probe on socket A: %w", aRes.err)
-		return res
+		return netip.AddrPort{}, fmt.Errorf("STUN probe on socket A: %w", aRes.err)
 	}
 	if bRes.err != nil {
-		res.Err = fmt.Errorf("STUN probe on socket B: %w", bRes.err)
-		return res
+		return netip.AddrPort{}, fmt.Errorf("STUN probe on socket B: %w", bRes.err)
 	}
 	if !bRes.mapped.IsValid() {
-		res.Err = errors.New("STUN probe on socket B returned invalid mapped endpoint")
-		return res
+		return netip.AddrPort{}, errors.New("STUN probe on socket B returned invalid mapped endpoint")
 	}
-
-	tag := make([]byte, 16)
-	if _, err := rand.Read(tag); err != nil {
-		res.Err = fmt.Errorf("generate hairpin tag: %w", err)
-		return res
-	}
-
-	if err := send(ctx, connA, bRes.mapped, tag); err != nil {
-		res.Err = fmt.Errorf("hairpin send A→mB: %w", err)
-		return res
-	}
-
-	arrived, err := recv(ctx, connB, tag, timeout)
-	if err != nil {
-		res.Err = fmt.Errorf("hairpin listen on B: %w", err)
-		return res
-	}
-	res.Detected = &arrived
-	return res
+	return bRes.mapped, nil
 }
 
 func realHairpinSend(ctx context.Context, from net.PacketConn, to netip.AddrPort, tag []byte) error {

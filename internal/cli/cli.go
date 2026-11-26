@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -30,9 +31,10 @@ var defaultServers = []probe.Server{
 	{Host: "stun.cloudflare.com", Port: 3478},
 }
 
-// FilteringFunc runs the RFC 5780 §4.4 filtering classification against a
-// single server. Default impl is probe.ProbeFiltering; tests inject stubs.
-type FilteringFunc func(ctx context.Context, s probe.Server, timeout time.Duration) probe.FilteringResult
+// FilteringFunc runs the RFC 5780 §4.4 filtering classification against the
+// address a mapping probe reached. Default impl is probe.ProbeFiltering; tests
+// inject stubs.
+type FilteringFunc func(s probe.Server, target netip.AddrPort, timeout time.Duration) probe.FilteringResult
 
 // HairpinFunc runs the RFC 5780 §4.3 hairpinning detection against a single
 // server. Default impl is probe.ProbeHairpinning; tests inject stubs.
@@ -111,7 +113,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober p
 			if budget > filteringTimeoutCap {
 				budget = filteringTimeoutCap
 			}
-			res := filterer(ctx, r.Server, budget)
+			res := filterer(r.Server, r.Target, budget)
 			filteringResult = &res
 			break
 		}
