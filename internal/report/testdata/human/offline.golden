@@ -1,0 +1,10 @@
+Direct P2P: unknown
+NAT type: Blocked
+
+Probes:
+  stun.l.google.com:19302   error=resolve stun.l.google.com: lookup stun.l.google.com: no such host
+  stun.cloudflare.com:3478  error=resolve stun.cloudflare.com: lookup stun.cloudflare.com: no such host
+
+Filtering not tested.
+All probes failed.
+Hairpinning not tested (local socket setup or STUN probe failed).

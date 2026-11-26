@@ -31,7 +31,17 @@ func ok(host string, port int, mapped string, rtt time.Duration) probe.Result {
 	}
 }
 
+// fail is a request that was sent and got no usable reply.
 func fail(host string, port int) probe.Result {
+	return probe.Result{
+		Server: probe.Server{Host: host, Port: port},
+		Target: targetFor(host, port),
+		Err:    errProbe,
+	}
+}
+
+// unsent is a request that never left the host: resolve or send failed.
+func unsent(host string, port int) probe.Result {
 	return probe.Result{
 		Server: probe.Server{Host: host, Port: port},
 		Err:    errProbe,
@@ -53,11 +63,11 @@ func TestClassify(t *testing.T) {
 		wantWarnAbsent []string // warnings that must NOT be present
 	}{
 		{
-			name:         "empty input — Blocked",
+			name:         "empty input — Blocked, nothing sent",
 			results:      nil,
 			wantType:     Blocked,
-			wantP2P:      "unlikely",
-			wantTURN:     true,
+			wantP2P:      "unknown",
+			wantTURN:     false,
 			wantWarnings: []string{WarnAllProbesFailed},
 		},
 		{
@@ -65,6 +75,28 @@ func TestClassify(t *testing.T) {
 			results: []probe.Result{
 				fail("google", 19302),
 				fail("cloudflare", 3478),
+			},
+			wantType:     Blocked,
+			wantP2P:      "unlikely",
+			wantTURN:     true,
+			wantWarnings: []string{WarnAllProbesFailed},
+		},
+		{
+			name: "0/2 nothing sent — Blocked, unknown",
+			results: []probe.Result{
+				unsent("google", 19302),
+				unsent("cloudflare", 3478),
+			},
+			wantType:     Blocked,
+			wantP2P:      "unknown",
+			wantTURN:     false,
+			wantWarnings: []string{WarnAllProbesFailed},
+		},
+		{
+			name: "0/2 one sent, one unsent — Blocked, unlikely",
+			results: []probe.Result{
+				fail("google", 19302),
+				unsent("cloudflare", 3478),
 			},
 			wantType:     Blocked,
 			wantP2P:      "unlikely",

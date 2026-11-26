@@ -10,6 +10,7 @@ package classify
 import (
 	"errors"
 	"net/netip"
+	"slices"
 
 	"github.com/1mb-dev/natcheck/internal/probe"
 )
@@ -127,6 +128,10 @@ type Verdict struct {
 	Hairpinning *bool
 	Warnings    []string
 	Forecast    Forecast
+
+	// nothingSent is true for Blocked when no request left the host (every
+	// Target invalid: resolve or send failed), so nothing was measured.
+	nothingSent bool
 }
 
 // Stable warning vocabulary for the JSON API.
@@ -208,6 +213,7 @@ func classifyMapping(results []probe.Result) Verdict {
 	if len(successes) == 0 {
 		v.Type = Blocked
 		v.Warnings = append(v.Warnings, WarnAllProbesFailed)
+		v.nothingSent = !slices.ContainsFunc(results, func(r probe.Result) bool { return r.Target.IsValid() })
 		return v
 	}
 
@@ -405,16 +411,20 @@ func applyFiltering(v *Verdict, f *probe.FilteringResult) {
 // decideForecast computes the WebRTC forecast from a fully-populated Verdict.
 // Precedence (top-down, first match wins):
 //  1. CGNAT detected → unknown (v0.1 honesty rule preserved)
-//  2. Mapping ADM/APDM/Blocked → unlikely
-//  3. Mapping Unknown → unknown
-//  4. Mapping EIM with restrictive filtering (ADF/APDF) → possible
-//  5. Mapping EIM with EIF or untested filtering → likely
+//  2. Blocked with no request sent → unknown
+//  3. Mapping ADM/APDM/Blocked → unlikely
+//  4. Mapping Unknown → unknown
+//  5. Mapping EIM with restrictive filtering (ADF/APDF) → possible
+//  6. Mapping EIM with EIF or untested filtering → likely
 func decideForecast(v Verdict) Forecast {
 	if v.CGNAT {
 		return Forecast{DirectP2P: "unknown", TURNRequired: false}
 	}
 	switch v.Type {
 	case Blocked:
+		if v.nothingSent {
+			return Forecast{DirectP2P: "unknown", TURNRequired: false}
+		}
 		return Forecast{DirectP2P: "unlikely", TURNRequired: true}
 	case AddressDependentMapping, AddressPortDependentMapping:
 		return Forecast{DirectP2P: "unlikely", TURNRequired: true}
