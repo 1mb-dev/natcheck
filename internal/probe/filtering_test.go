@@ -298,9 +298,14 @@ func TestProbeFiltering_Test1Failed(t *testing.T) {
 }
 
 func TestProbeFiltering_InvalidTarget(t *testing.T) {
-	res := ProbeFiltering(Server{Host: "h", Port: 3478}, netip.AddrPort{}, time.Second)
-	if res.Err == nil {
-		t.Fatal("expected error for zero target")
+	for _, target := range []netip.AddrPort{
+		{},
+		netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0),
+	} {
+		res := ProbeFiltering(Server{Host: "h", Port: 3478}, target, time.Second)
+		if res.Err == nil || errors.Is(res.Err, ErrTest1Failed) {
+			t.Errorf("target %v: Err = %v, want rejection before any send", target, res.Err)
+		}
 	}
 }
 

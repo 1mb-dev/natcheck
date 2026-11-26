@@ -328,3 +328,49 @@ func TestHairpinAddrs_EveryAddressFails(t *testing.T) {
 		t.Errorf("Detected = %v; want nil", res.Detected)
 	}
 }
+
+// TestHairpinAddrs_CancelStopsFallthrough: after a cancel, a failed address is
+// not followed by the next one, whatever made it fail.
+func TestHairpinAddrs_CancelStopsFallthrough(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		udp6     func() (net.PacketConn, error)
+		sendFail bool
+	}{
+		{"bind_fails", func() (net.PacketConn, error) { return nil, errors.New("no IPv6 here") }, false},
+		{"send_fails", func() (net.PacketConn, error) {
+			c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			return noRouteConn{c}, err
+		}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var boundV4 bool
+			listen := func(network, _ string) (net.PacketConn, error) {
+				if network == "udp4" {
+					boundV4 = true
+					return nil, errors.New("udp4 must not be bound")
+				}
+				return tc.udp6()
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			ips := []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("127.0.0.1")}
+			res := hairpinAddrs(ctx, Server{Host: "h", Port: 3478}, ips, 100*time.Millisecond, listen, realHairpinSend, realHairpinRecv)
+			if boundV4 {
+				t.Fatal("fell through to the next address after cancel")
+			}
+			if !errors.Is(res.Err, context.Canceled) {
+				t.Errorf("Err = %v, want context.Canceled", res.Err)
+			}
+			if tc.sendFail && !errors.Is(res.Err, errSendFailed) {
+				t.Errorf("Err = %v, want the send failure", res.Err)
+			}
+			if res.Detected != nil {
+				t.Errorf("Detected = %v; want nil", res.Detected)
+			}
+		})
+	}
+}

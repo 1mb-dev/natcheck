@@ -75,7 +75,7 @@ func probeHairpinning(ctx context.Context, server Server, timeout time.Duration,
 
 // hairpinAddrs uses the first address whose sockets bind and send, as
 // probeAddrs does for the mapping probe. Silence does not fall through: it has
-// already spent the probe's wait.
+// already spent the probe's wait. Nothing falls through once ctx is done.
 func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout time.Duration,
 	listen func(network, address string) (net.PacketConn, error), send hairpinSender, recv hairpinReceiver) HairpinningResult {
 	res := HairpinningResult{Server: server}
@@ -87,7 +87,11 @@ func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout 
 
 	var pair *hairpinPair
 	var mappedB netip.AddrPort
-	for _, ip := range ips {
+	for i, ip := range ips {
+		if i > 0 && ctx.Err() != nil {
+			res.Err = fmt.Errorf("%w: %w", ctx.Err(), res.Err)
+			return res
+		}
 		ip = ip.Unmap()
 		p, err := listenPair(ctx, ip, listen)
 		if err != nil {
