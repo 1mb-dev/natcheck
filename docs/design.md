@@ -105,7 +105,7 @@ The JSON schema is a public contract from v0.1 onward; only additive changes aft
 
 ### Failure modes
 
-- All probes timeout → exit 2, report per-server errors
+- All probes fail → exit 2, report per-server errors. Forecast `unlikely` when a request left the host, `unknown` when none did (offline, DNS failure, local firewall); `turn_required: true` either way
 - Mapped endpoints disagree across servers → NAT type "Address-Dependent Mapping" (or APDM if we can distinguish; v0.1 reports "ADM or stricter"), exit 1, forecast `unlikely`
 - Mapped IP in `100.64.0.0/10` → warning `cgnat_detected`, forecast `unknown`
 

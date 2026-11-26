@@ -70,12 +70,17 @@ Pointing `--server` at a STUN server that advertises `OTHER-ADDRESS` (e.g. cotur
 | `1` | P2P-hostile | `Direct P2P: unlikely` or `unknown` |
 | `2` | Probe or flag error | All probes failed, invalid flag, or bad `--server` |
 
-Scripts that ask "did the tool run?" check `$? -ne 2`. Scripts that ask "can I use direct P2P?" check `$? -eq 0`.
+Scripts that ask "did the tool run?" check `$? -ne 2`. Scripts that ask "can I use direct P2P?" check `$? -eq 0`. Exit `2` takes precedence over the forecast: no mapping was measured, so read `webrtc_forecast` only when `$? -ne 2`.
 
 ## CI usage
 
 ```bash
-if ! natcheck --json > natcheck.json; then
+code=0
+natcheck --json > natcheck.json || code=$?
+if [ "$code" -eq 2 ]; then
+  echo "natcheck could not probe"
+  exit 2
+elif [ "$code" -ne 0 ]; then
   echo "NAT not P2P-friendly: $(jq -r '.webrtc_forecast.direct_p2p' natcheck.json)"
   exit 1
 fi
