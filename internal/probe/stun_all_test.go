@@ -365,6 +365,9 @@ func TestProbeAll_ResolveFailure(t *testing.T) {
 	if res.Err == nil {
 		t.Fatal("expected resolve error, got success")
 	}
+	if res.Target.IsValid() {
+		t.Errorf("Target = %v, want zero when resolve failed", res.Target)
+	}
 }
 
 func TestResolveHost_LiteralsSkipTheResolver(t *testing.T) {

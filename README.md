@@ -67,7 +67,7 @@ Pointing `--server` at a STUN server that advertises `OTHER-ADDRESS` (e.g. cotur
 | Code | Meaning | When |
 |------|---------|------|
 | `0` | P2P-friendly | `Direct P2P: likely` or `possible` |
-| `1` | P2P-hostile | `Direct P2P: unlikely` or `unknown`, with at least one probe answered |
+| `1` | P2P-hostile | `Direct P2P: unlikely` or `unknown`, with at least one mapped endpoint returned |
 | `2` | Probe or flag error | All probes failed, invalid flag, or bad `--server` |
 
 Scripts that ask "did the tool run?" check `$? -ne 2`, and read `webrtc_forecast` only then. Scripts that ask "can I use direct P2P?" check `$? -eq 0`.
