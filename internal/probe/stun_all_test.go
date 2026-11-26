@@ -5,9 +5,11 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -330,12 +332,41 @@ func TestProbeAddrs_AllSendsFailed(t *testing.T) {
 	}
 }
 
+// refusedConn fails every send with EPERM, as Linux does when an OUTPUT
+// firewall rule drops or rejects the packet.
+type refusedConn struct{ net.PacketConn }
+
+func (refusedConn) WriteTo([]byte, net.Addr) (int, error) {
+	return 0, &net.OpError{Op: "write", Net: "udp", Err: os.NewSyscallError("sendto", syscall.EPERM)}
+}
+
+// A locally refused send leaves Target zero, as a resolve failure does.
+func TestProbeAddrs_SendRefused(t *testing.T) {
+	run := newMappingRun()
+	defer run.close()
+	run.listen = func(network, address string) (net.PacketConn, error) {
+		c, err := net.ListenPacket(network, address)
+		return refusedConn{c}, err
+	}
+
+	res := run.probeAddrs(context.Background(), Server{Host: "h", Port: 3478}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
+	if !errors.Is(res.Err, syscall.EPERM) {
+		t.Fatalf("Err = %v, want EPERM", res.Err)
+	}
+	if res.Target.IsValid() {
+		t.Errorf("Target = %v, want zero when the send was refused", res.Target)
+	}
+}
+
 func TestProbeAll_ResolveFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	res := probeOne(ctx, Server{Host: "natcheck.invalid", Port: 3478})
 	if res.Err == nil {
 		t.Fatal("expected resolve error, got success")
+	}
+	if res.Target.IsValid() {
+		t.Errorf("Target = %v, want zero when resolve failed", res.Target)
 	}
 }
 

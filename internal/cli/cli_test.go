@@ -165,9 +165,33 @@ func TestRun_Blocked_Exit2(t *testing.T) {
 		"stun.l.google.com:19302":  {Err: errors.New("dial udp: connection refused")},
 		"stun.cloudflare.com:3478": {Err: errors.New("dial udp: connection refused")},
 	}}
-	code, _, _ := run(t, fp)
+	code, out, _ := run(t, fp)
 	if code != 2 {
 		t.Errorf("code = %d, want 2", code)
+	}
+	if !strings.Contains(out, "Direct P2P: unlikely") {
+		t.Errorf("sent and unanswered must read unlikely; got %q", out)
+	}
+}
+
+// unsentProber fails every probe before a request leaves the host.
+type unsentProber struct{}
+
+func (unsentProber) ProbeAll(_ context.Context, servers []probe.Server) []probe.Result {
+	results := make([]probe.Result, len(servers))
+	for i, s := range servers {
+		results[i] = probe.Result{Server: s, Err: errors.New("resolve " + s.Host + ": no such host")}
+	}
+	return results
+}
+
+func TestRun_Offline_Exit2(t *testing.T) {
+	code, out, _ := run(t, unsentProber{})
+	if code != 2 {
+		t.Errorf("code = %d, want 2", code)
+	}
+	if !strings.Contains(out, "Direct P2P: unknown") {
+		t.Errorf("nothing sent must read unknown; got %q", out)
 	}
 }
 

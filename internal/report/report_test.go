@@ -18,7 +18,8 @@ import (
 //   - ipv4_untested: probes agree over IPv6 and no IPv4 probe answered
 //   - insufficient_server_diversity: probes agree, but both reached one server IP
 //   - adm_strict: 2/2 probes disagree (symmetric NAT; TURN required)
-//   - blocked: 2/2 probes failed (no network to outbound STUN)
+//   - blocked: 2/2 probes sent and timed out (no network to outbound STUN)
+//   - offline: 2/2 probes never left the host (resolve failed)
 
 func fixtureEIMCone() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 	probes := []probe.Result{
@@ -94,11 +95,27 @@ func fixtureBlocked() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 	probes := []probe.Result{
 		{
 			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
 			Err:    errors.New("dial udp stun.l.google.com:19302: i/o timeout"),
 		},
 		{
 			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
 			Err:    errors.New("dial udp stun.cloudflare.com:3478: i/o timeout"),
+		},
+	}
+	return classify.Classify(probes, nil, nil), probes, nil
+}
+
+func fixtureOffline() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Err:    errors.New("resolve stun.l.google.com: lookup stun.l.google.com: no such host"),
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Err:    errors.New("resolve stun.cloudflare.com: lookup stun.cloudflare.com: no such host"),
 		},
 	}
 	return classify.Classify(probes, nil, nil), probes, nil
@@ -352,6 +369,7 @@ func TestRender_Golden(t *testing.T) {
 		{"insufficient_server_diversity", fixtureInsufficientServerDiversity},
 		{"adm_strict", fixtureADMStrict},
 		{"blocked", fixtureBlocked},
+		{"offline", fixtureOffline},
 		{"filtering_eif", fixtureFilteringEIF},
 		{"filtering_adf", fixtureFilteringADF},
 		{"filtering_apdf", fixtureFilteringAPDF},

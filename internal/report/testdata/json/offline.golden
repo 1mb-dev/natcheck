@@ -1,0 +1,28 @@
+{
+  "nat_type": "Blocked",
+  "nat_type_legacy": "",
+  "public_endpoint": "",
+  "probes": [
+    {
+      "server": "stun.l.google.com:19302",
+      "error": "resolve stun.l.google.com: lookup stun.l.google.com: no such host"
+    },
+    {
+      "server": "stun.cloudflare.com:3478",
+      "error": "resolve stun.cloudflare.com: lookup stun.cloudflare.com: no such host"
+    }
+  ],
+  "webrtc_forecast": {
+    "direct_p2p": "unknown",
+    "turn_required": true
+  },
+  "warnings": [
+    "filtering_behavior_not_tested",
+    "all_probes_failed",
+    "hairpin_untested"
+  ],
+  "filtering": {
+    "behavior": "untested"
+  },
+  "hairpinning": null
+}
