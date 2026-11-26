@@ -158,3 +158,21 @@ Filed at release: no-NAT verdict, exit-2 report printing `unlikely`, ADM and APD
 ### Notes
 
 - In the lab's coturn-without-RFC-5780 runs, some said `Filtering skipped` and others `Filtering not tested`. Both mean untested and the verdicts were correct. Cause not established.
+
+## v0.1.6 — 2026-11-26
+
+### Setup
+
+The v0.1.5 local Docker lab, unchanged: coturn 4.10.0 on two IPs, a Linux router container running netfilter NAT, a client behind it and a client beside it, all on internal Docker networks. All runs on `584001c`, the code tagged `v0.1.6`.
+
+### Verified
+
+| Run | Result | Proves |
+|---|---|---|
+| Lab, RFC 5780 coturn: no NAT, `MASQUERADE`, `SNAT` to a port range, `MASQUERADE --random-fully`, 3 runs each | Same verdict, NAT type, filtering, hairpinning and exit code as v0.1.5 in every run | This release's changes leave lab verdicts unchanged |
+| Lab, coturn without RFC 5780: no NAT, `MASQUERADE`, `MASQUERADE --random-fully`, 3 runs each | Same as v0.1.5 | As above, with filtering untested |
+
+### Not proven
+
+- The lab passes IP addresses to `--server`, so it never moves to a second resolved address (#44) or reaches the case where no request leaves the host (#40). Tests in CI cover both.
+- No real-network run, no consumer router, no public-internet coturn run for this release.

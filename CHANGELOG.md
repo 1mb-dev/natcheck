@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-11-26
+
+### Fixed
+
+- Filtering runs against the address the mapping probe reached instead of resolving the server again, and hairpinning moves to the next resolved address when its sockets cannot bind or a request cannot be sent (#44).
+- `direct_p2p` reads `unknown` instead of `unlikely` when no probe request left the host; exit 2 and `turn_required: true` are unchanged (#40).
+
+### Changed
+
+- `golang.org/x/crypto` 0.59.0 and `golang.org/x/sys` 0.50.0.
+
+### Validation
+
+Checked in a local Docker lab with coturn on two IPs behind Linux netfilter NAT; verdicts match v0.1.5. No consumer router has been tested. See [`docs/validation-log.md`](docs/validation-log.md).
+
 ## [0.1.5] — 2026-11-01
 
 Corrects the mapping verdict. Upgrade and rerun.
@@ -162,7 +177,8 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
 
-[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.6
 [0.1.5]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.5
 [0.1.4]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.4
 [0.1.3]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.3
