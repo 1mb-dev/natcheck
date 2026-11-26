@@ -69,7 +69,7 @@ func okProber() *fakeProber {
 // noFilterer returns a FilteringResult with ErrFilteringNotSupported. Used
 // when a test doesn't care about filtering (capability detection won't fire
 // for default servers anyway since the fakeProber doesn't populate Other).
-func noFilterer(_ context.Context, s probe.Server, _ time.Duration) probe.FilteringResult {
+func noFilterer(s probe.Server, _ netip.AddrPort, _ time.Duration) probe.FilteringResult {
 	return probe.FilteringResult{Server: s, Err: probe.ErrFilteringNotSupported}
 }
 
@@ -268,7 +268,7 @@ func TestRun_FilteringPicksFirstCapableServer(t *testing.T) {
 
 	var calledWith []probe.Server
 	var mu sync.Mutex
-	filterer := func(_ context.Context, s probe.Server, _ time.Duration) probe.FilteringResult {
+	filterer := func(s probe.Server, _ netip.AddrPort, _ time.Duration) probe.FilteringResult {
 		mu.Lock()
 		calledWith = append(calledWith, s)
 		mu.Unlock()
@@ -296,7 +296,7 @@ func TestRun_FilteringSkippedWhenNoCapableServer(t *testing.T) {
 	// Default fakeProber has no Other. Filterer must NOT be called.
 	fp := okProber()
 	var called int32
-	filterer := func(_ context.Context, _ probe.Server, _ time.Duration) probe.FilteringResult {
+	filterer := func(_ probe.Server, _ netip.AddrPort, _ time.Duration) probe.FilteringResult {
 		atomic.AddInt32(&called, 1)
 		return probe.FilteringResult{}
 	}
@@ -307,5 +307,48 @@ func TestRun_FilteringSkippedWhenNoCapableServer(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&called); n != 0 {
 		t.Errorf("filterer called %d times, want 0 (no server advertised OTHER-ADDRESS)", n)
+	}
+}
+
+// targetProber reports every server as reached at target, with OTHER-ADDRESS
+// set so that filtering runs.
+type targetProber struct{ target netip.AddrPort }
+
+func (p targetProber) ProbeAll(_ context.Context, servers []probe.Server) []probe.Result {
+	results := make([]probe.Result, len(servers))
+	for i, s := range servers {
+		results[i] = probe.Result{
+			Server: s,
+			Target: p.target,
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
+			RTT:    time.Millisecond,
+		}
+	}
+	return results
+}
+
+// TestRun_FilteringProbesMappingTarget: the server host resolves to ::1 while
+// the mapping probe reached 127.0.0.1, as under round-robin DNS or when the
+// first address has no route. Filtering must go where the mapping probe went.
+func TestRun_FilteringProbesMappingTarget(t *testing.T) {
+	c := listenLoopback(t)
+	got := make(chan struct{}, 1)
+	go func() {
+		buf := make([]byte, 1500)
+		if _, _, err := c.ReadFrom(buf); err == nil {
+			got <- struct{}{}
+		}
+	}()
+	port := c.LocalAddr().(*net.UDPAddr).Port
+	target := netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(port))
+
+	var out, errOut bytes.Buffer
+	args := []string{"--timeout", "400ms", "--server", net.JoinHostPort("::1", strconv.Itoa(port))}
+	runWith(context.Background(), args, &out, &errOut, targetProber{target}, probe.ProbeFiltering, noHairpiner)
+	select {
+	case <-got:
+	case <-time.After(time.Second):
+		t.Fatal("no filtering request reached the mapping probe's target")
 	}
 }

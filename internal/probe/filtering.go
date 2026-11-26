@@ -1,12 +1,10 @@
 package probe
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
-	"strconv"
 	"time"
 
 	"github.com/1mb-dev/natcheck/internal/stunserver"
@@ -18,8 +16,9 @@ import (
 // advertised no OTHER-ADDRESS or it ignored CHANGE-REQUEST, Test2Received and
 // Test3Received are both false and Err wraps ErrFilteringNotSupported.
 //
-// Server is the target of the §4.4 sequence (echoed from the ProbeFiltering
-// argument so consumers can attribute the result without re-threading state).
+// Server is the server whose mapping target the §4.4 sequence ran against
+// (echoed from the ProbeFiltering argument so consumers can attribute the
+// result without re-threading state).
 type FilteringResult struct {
 	Server        Server
 	Test1Mapped   netip.AddrPort
@@ -42,41 +41,27 @@ var ErrTest1Failed = errors.New("initial probe failed; cannot run §4.4 sequence
 // Package-internal: callers in this file translate it to Test{2,3}Received=false.
 var errNoResponse = errors.New("no response within deadline")
 
-// ProbeFiltering runs RFC 5780 §4.4 against server. Uses one unconnected UDP
-// socket for all three tests so (a) the NAT mapping stays stable across tests
-// and (b) the socket can receive responses from the server's alt-IP/alt-port
-// sources (a connected UDP socket would filter those out). Tests 2/3 are
-// one-shot; "no response within timeout/2" is the verdict, not an error.
-//
-// ctx governs the initial address resolution only; once resolution completes,
-// per-test SetReadDeadline timers (timeout/2 each) drive the rest. Cancelling
-// ctx mid-call has no effect on in-flight reads.
-func ProbeFiltering(ctx context.Context, server Server, timeout time.Duration) FilteringResult {
+// ProbeFiltering runs RFC 5780 §4.4 against target, the address the mapping
+// probe of server reached. Resolving the host again could reach a host that did
+// not advertise OTHER-ADDRESS, or an address with no route. Uses one unconnected
+// UDP socket for all three tests so (a) the NAT mapping stays stable across
+// tests and (b) the socket can receive responses from the server's alt-IP/
+// alt-port sources (a connected UDP socket would filter those out). Tests 2/3
+// are one-shot; "no response within timeout/2" is the verdict, not an error.
+func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
 	res := FilteringResult{Server: server}
-	if server.Host == "" || server.Port <= 0 || server.Port > 65535 {
-		res.Err = fmt.Errorf("invalid server %q:%d", server.Host, server.Port)
+	if !target.IsValid() || target.Port() == 0 {
+		res.Err = fmt.Errorf("invalid target %v for %s:%d", target, server.Host, server.Port)
 		return res
 	}
-
-	hostport := net.JoinHostPort(server.Host, strconv.Itoa(server.Port))
-	var resolver net.Resolver
-	ips, err := resolver.LookupNetIP(ctx, "ip", server.Host)
-	if err != nil {
-		res.Err = fmt.Errorf("resolve %s: %w", server.Host, err)
-		return res
-	}
-	if len(ips) == 0 {
-		res.Err = fmt.Errorf("resolve %s: no addresses", server.Host)
-		return res
-	}
-	ip := ips[0].Unmap()
-	target := netip.AddrPortFrom(ip, uint16(server.Port))
+	ip := target.Addr().Unmap()
+	target = netip.AddrPortFrom(ip, target.Port())
 	remote := net.UDPAddrFromAddrPort(target)
 
 	network, listenAddr := pickNetwork(ip)
 	conn, err := net.ListenPacket(network, listenAddr)
 	if err != nil {
-		res.Err = fmt.Errorf("listen %s: %w", hostport, err)
+		res.Err = fmt.Errorf("listen %s: %w", target, err)
 		return res
 	}
 	defer func() { _ = conn.Close() }()
