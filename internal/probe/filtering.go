@@ -41,6 +41,10 @@ var ErrTest1Failed = errors.New("initial probe failed; cannot run §4.4 sequence
 // Package-internal: callers in this file translate it to Test{2,3}Received=false.
 var errNoResponse = errors.New("no response within deadline")
 
+// errSendFailed marks a request that never left the host, such as a send with
+// no route. The next resolved address may still work.
+var errSendFailed = errors.New("write")
+
 // ProbeFiltering runs RFC 5780 §4.4 against target, the address the mapping
 // probe of server reached. Resolving the host again could reach a host that did
 // not advertise OTHER-ADDRESS, or an address with no route. Uses one unconnected
@@ -159,7 +163,7 @@ func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Dura
 		return nil, fmt.Errorf("set write deadline: %w", err)
 	}
 	if _, err := conn.WriteTo(req.Raw, remote); err != nil {
-		return nil, fmt.Errorf("write: %w", err)
+		return nil, fmt.Errorf("%w: %w", errSendFailed, err)
 	}
 
 	buf := make([]byte, 1500)

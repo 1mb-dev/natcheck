@@ -267,3 +267,64 @@ func TestProbeHairpinning_SendOracleError(t *testing.T) {
 		t.Errorf("Detected = %v; want nil on send error", res.Detected)
 	}
 }
+
+// noRouteConn fails every send at once, as a socket does when its family has
+// no route to the target.
+type noRouteConn struct{ net.PacketConn }
+
+func (noRouteConn) WriteTo([]byte, net.Addr) (int, error) {
+	return 0, errors.New("network is unreachable")
+}
+
+// TestHairpinAddrs_FirstAddressFails: a host whose first address cannot be
+// used falls through to the next, as the mapping probe does.
+func TestHairpinAddrs_FirstAddressFails(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		udp6 func() (net.PacketConn, error)
+	}{
+		{"bind_fails", func() (net.PacketConn, error) { return nil, errors.New("no IPv6 here") }},
+		{"send_fails", func() (net.PacketConn, error) {
+			c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			return noRouteConn{c}, err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeStunEcho(t)
+			listen := func(network, address string) (net.PacketConn, error) {
+				if network == "udp6" {
+					return tc.udp6()
+				}
+				return net.ListenPacket(network, address)
+			}
+			ips := []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("127.0.0.1")}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			res := hairpinAddrs(ctx, f.server(), ips, 500*time.Millisecond, listen, realHairpinSend, realHairpinRecv)
+			if res.Err != nil {
+				t.Fatalf("expected fallback to IPv4, got: %v", res.Err)
+			}
+			if res.Detected == nil || !*res.Detected {
+				t.Errorf("Detected = %v; want &true over IPv4", res.Detected)
+			}
+		})
+	}
+}
+
+// TestHairpinAddrs_EveryAddressFails reports the last failure and no verdict.
+func TestHairpinAddrs_EveryAddressFails(t *testing.T) {
+	t.Parallel()
+	listenErr := errors.New("no sockets")
+	listen := func(string, string) (net.PacketConn, error) { return nil, listenErr }
+	ips := []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("127.0.0.1")}
+	res := hairpinAddrs(context.Background(), Server{Host: "h", Port: 3478}, ips, 100*time.Millisecond, listen, realHairpinSend, realHairpinRecv)
+	if !errors.Is(res.Err, listenErr) {
+		t.Fatalf("Err = %v, want the bind failure", res.Err)
+	}
+	if res.Detected != nil {
+		t.Errorf("Detected = %v; want nil", res.Detected)
+	}
+}
