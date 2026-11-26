@@ -1,9 +1,9 @@
 # natcheck — Architecture
 
-> Status: v0.1.5 shipped (mapping measured from one socket per address family). v0.2 design contract is the addendum at end of document.
-> Last updated: 2026-11-01
+> Status: v0.1.6 shipped. v0.2 design contract is the addendum at end of document.
+> Last updated: 2026-11-26
 
-Product framing and technical spec. v0.1 spec lives in this document as shipped; v0.2 design is the addendum at the end. Working notes and per-phase plans live in `todos/` (dev-internal, not tracked in git).
+Product framing and technical spec. v0.1 spec lives in this document as shipped; v0.2 design is the addendum at the end.
 
 ## Problem
 
