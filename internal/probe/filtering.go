@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"time"
 
 	"github.com/1mb-dev/natcheck/internal/stunserver"
@@ -51,10 +52,11 @@ var errSendFailed = errors.New("write")
 // not advertise OTHER-ADDRESS, or an address with no route. Uses one unconnected
 // UDP socket for all three tests so (a) the NAT mapping stays stable across
 // tests and (b) the socket can receive responses from the server's alt-IP/
-// alt-port sources (a connected UDP socket would filter those out). Tests 2/3
-// are one-shot; "no response within timeout/2" is the verdict, not an error.
-// No ctx: cli runs filtering after the mapping probes and outside their
-// --timeout context, so timeout is its only bound.
+// alt-port sources (a connected UDP socket would filter those out). Each test
+// gets timeout/2, resent as sendBindingAndWait schedules; silence for the whole
+// window is the Test 2/3 verdict, not an error. No ctx: cli runs filtering
+// after the mapping probes and outside their --timeout context, so timeout is
+// its only bound.
 func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
 	res := FilteringResult{Server: server}
 	if !target.IsValid() || target.Port() == 0 {
@@ -142,11 +144,13 @@ type changeRequestPayload struct {
 }
 
 // sendBindingAndWait sends one BindingRequest (with optional CHANGE-REQUEST)
-// to remote and waits up to wait for a matching response. The conn is an
+// to remote and waits up to wait for a matching response, resending the same
+// request on the retransmitGaps schedule while the next send falls inside the
+// window (TestProbeFiltering_ResendsLostChangeRequests). The conn is an
 // unconnected PacketConn so responses can arrive from sources other than
-// remote (RFC 5780 §4.4: server replies from alt-IP/alt-port).
-// Returns ctx's error if ctx is done before a reply or the window's end, and
-// errNoResponse once the window ends with no matching reply, ctx done or not
+// remote (RFC 5780 §4.4: server replies from alt-IP/alt-port). Returns ctx's
+// error if ctx is done before a reply or the window's end, and errNoResponse
+// once the window ends with no matching reply, ctx done or not
 // (TestSendBindingAndWait_FullWindowIsNoResponseAfterCtxEnds). Discards stale
 // packets with non-matching transaction IDs (e.g., late responses from a prior
 // test) and keeps reading. The result records the reply's source; judging it
@@ -165,7 +169,8 @@ func sendBindingAndWait(ctx context.Context, conn net.PacketConn, remote net.Add
 	}
 	req.Encode()
 
-	end := time.Now().Add(wait)
+	sent := time.Now()
+	end := sent.Add(wait)
 	if err := conn.SetWriteDeadline(end); err != nil {
 		return nil, fmt.Errorf("set write deadline: %w", err)
 	}
@@ -173,18 +178,27 @@ func sendBindingAndWait(ctx context.Context, conn net.PacketConn, remote net.Add
 		return nil, fmt.Errorf("%w: %w", errSendFailed, err)
 	}
 
+	gaps := retransmitGaps
 	buf := make([]byte, 1500)
 	for {
 		if !time.Now().Before(end) {
 			return nil, errNoResponse
 		}
-		n, from, err := readUntil(ctx, conn, buf, end)
+		readEnd := end
+		if len(gaps) > 0 && sent.Add(gaps[0]).Before(end) {
+			readEnd = sent.Add(gaps[0])
+		}
+		n, from, err := readUntil(ctx, conn, buf, readEnd)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil && time.Now().Before(end) {
 				return nil, ctxErr
 			}
-			// Deadline reached or fatal error.
-			return nil, errNoResponse
+			if readEnd.Equal(end) || !errors.Is(err, os.ErrDeadlineExceeded) {
+				return nil, errNoResponse
+			}
+			_, _ = conn.WriteTo(req.Raw, remote)
+			sent, gaps = readEnd, gaps[1:]
+			continue
 		}
 		resp := &stun.Message{Raw: append([]byte{}, buf[:n]...)}
 		if err := resp.Decode(); err != nil {

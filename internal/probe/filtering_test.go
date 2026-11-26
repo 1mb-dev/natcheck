@@ -37,7 +37,8 @@ type fakeFilteringServer struct {
 	dropFrom     map[corner]bool
 	mu           sync.Mutex
 	respondCount int
-	noiseAfter   int // if > 0, dispatcher injects one bogus-TXID packet after the Nth real response
+	noiseAfter   int                                   // if > 0, dispatcher injects one bogus-TXID packet after the Nth real response
+	lost         map[[stun.TransactionIDSize]byte]bool // non-nil: lose the first copy of each CHANGE-REQUEST
 	done         chan struct{}
 	wg           sync.WaitGroup
 }
@@ -49,6 +50,30 @@ func (f *fakeFilteringServer) setNoiseAfter(n int) {
 	f.mu.Lock()
 	f.noiseAfter = n
 	f.mu.Unlock()
+}
+
+// loseFirstChangeRequests makes the server drop the first copy of each
+// CHANGE-REQUEST transaction, as one lost packet per test would.
+func (f *fakeFilteringServer) loseFirstChangeRequests() {
+	f.mu.Lock()
+	f.lost = map[[stun.TransactionIDSize]byte]bool{}
+	f.mu.Unlock()
+}
+
+// loses reports whether data is the first copy of a CHANGE-REQUEST transaction
+// while loseFirstChangeRequests is on.
+func (f *fakeFilteringServer) loses(data []byte) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.lost == nil {
+		return false
+	}
+	m := &stun.Message{Raw: append([]byte{}, data...)}
+	if m.Decode() != nil || f.lost[m.TransactionID] {
+		return false
+	}
+	f.lost[m.TransactionID] = true
+	return true
 }
 
 // newFakeFilteringServer binds 4 loopback sockets and starts a single reader
@@ -151,6 +176,9 @@ func (f *fakeFilteringServer) serve() {
 func (f *fakeFilteringServer) dispatch(received corner, data []byte, src net.Addr) {
 	changeIP, changePort, ok := stunserver.ParseChangeRequest(data)
 	target := received
+	if ok && f.loses(data) {
+		return
+	}
 	if ok {
 		switch {
 		case changeIP && changePort:
@@ -341,6 +369,29 @@ func TestProbeFiltering_StalePacketDoesNotPollute(t *testing.T) {
 	}
 	if !res.Test2Received || !res.Test3Received {
 		t.Fatalf("Test2=%v Test3=%v; baseline must be EIF even with noise injection", res.Test2Received, res.Test3Received)
+	}
+}
+
+// TestProbeFiltering_ResendsLostChangeRequests: with the first copy of Tests 2
+// and 3 lost, a resend of the same transaction gets its answer at cli's cap
+// (1.5s, a 750ms window). At 1s the 500ms window ends before the resend, so the
+// loss reads as not received. A new transaction ID would be lost too.
+func TestProbeFiltering_ResendsLostChangeRequests(t *testing.T) {
+	for _, tc := range []struct {
+		budget time.Duration
+		want   bool
+	}{{1500 * time.Millisecond, true}, {time.Second, false}} {
+		t.Run(tc.budget.String(), func(t *testing.T) {
+			f := newFakeFilteringServer(t)
+			f.loseFirstChangeRequests()
+			res := probeFiltering(f.primaryServer(), tc.budget)
+			if res.Err != nil {
+				t.Fatalf("Err = %v, want nil", res.Err)
+			}
+			if res.Test2Received != tc.want || res.Test3Received != tc.want {
+				t.Fatalf("Test2=%v Test3=%v, want both %v", res.Test2Received, res.Test3Received, tc.want)
+			}
+		})
 	}
 }
 
