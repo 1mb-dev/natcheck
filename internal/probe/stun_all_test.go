@@ -340,8 +340,7 @@ func (refusedConn) WriteTo([]byte, net.Addr) (int, error) {
 	return 0, &net.OpError{Op: "write", Net: "udp", Err: os.NewSyscallError("sendto", syscall.EPERM)}
 }
 
-// A locally refused send leaves Target zero, so classify reads it as nothing
-// sent.
+// A locally refused send leaves Target zero, as a resolve failure does.
 func TestProbeAddrs_SendRefused(t *testing.T) {
 	run := newMappingRun()
 	defer run.close()

@@ -39,7 +39,7 @@ go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
 | Code | Meaning |
 |------|---------|
 | `0`  | P2P-friendly (`likely` or `possible`) |
-| `1`  | P2P-hostile (`unlikely` or `unknown`) |
+| `1`  | P2P-hostile (`unlikely` or `unknown`, with at least one probe answered) |
 | `2`  | probe or flag error |
 
 `$? -ne 2`: tool ran; read the forecast only then. `$? -eq 0`: direct P2P available.
