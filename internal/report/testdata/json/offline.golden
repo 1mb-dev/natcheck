@@ -14,7 +14,7 @@
   ],
   "webrtc_forecast": {
     "direct_p2p": "unknown",
-    "turn_required": false
+    "turn_required": true
   },
   "warnings": [
     "filtering_behavior_not_tested",

@@ -411,8 +411,8 @@ func applyFiltering(v *Verdict, f *probe.FilteringResult) {
 // decideForecast computes the WebRTC forecast from a fully-populated Verdict.
 // Precedence (top-down, first match wins):
 //  1. CGNAT detected → unknown (v0.1 honesty rule preserved)
-//  2. Blocked with no request sent → unknown
-//  3. Mapping ADM/APDM/Blocked → unlikely
+//  2. Blocked → TURN required; unknown when no request was sent, else unlikely
+//  3. Mapping ADM/APDM → unlikely
 //  4. Mapping Unknown → unknown
 //  5. Mapping EIM with restrictive filtering (ADF/APDF) → possible
 //  6. Mapping EIM with EIF or untested filtering → likely
@@ -422,10 +422,13 @@ func decideForecast(v Verdict) Forecast {
 	}
 	switch v.Type {
 	case Blocked:
+		// Nothing sent includes a local firewall refusing UDP, which leaves
+		// only a relay, so TURNRequired holds either way.
+		p2p := "unlikely"
 		if v.nothingSent {
-			return Forecast{DirectP2P: "unknown", TURNRequired: false}
+			p2p = "unknown"
 		}
-		return Forecast{DirectP2P: "unlikely", TURNRequired: true}
+		return Forecast{DirectP2P: p2p, TURNRequired: true}
 	case AddressDependentMapping, AddressPortDependentMapping:
 		return Forecast{DirectP2P: "unlikely", TURNRequired: true}
 	case Unknown:

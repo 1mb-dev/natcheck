@@ -67,7 +67,7 @@ func TestClassify(t *testing.T) {
 			results:      nil,
 			wantType:     Blocked,
 			wantP2P:      "unknown",
-			wantTURN:     false,
+			wantTURN:     true,
 			wantWarnings: []string{WarnAllProbesFailed},
 		},
 		{
@@ -89,7 +89,7 @@ func TestClassify(t *testing.T) {
 			},
 			wantType:     Blocked,
 			wantP2P:      "unknown",
-			wantTURN:     false,
+			wantTURN:     true,
 			wantWarnings: []string{WarnAllProbesFailed},
 		},
 		{
@@ -645,6 +645,7 @@ func TestDecideForecast_Precedence(t *testing.T) {
 		{"cgnat_overrides_eim_eif", Verdict{Type: EndpointIndependentMapping, CGNAT: true, Filtering: FilteringEndpointIndependent}, Forecast{DirectP2P: "unknown"}},
 		{"cgnat_overrides_eim_adf", Verdict{Type: EndpointIndependentMapping, CGNAT: true, Filtering: FilteringAddressDependent}, Forecast{DirectP2P: "unknown"}},
 		{"blocked_no_cgnat", Verdict{Type: Blocked}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
+		{"blocked_nothing_sent", Verdict{Type: Blocked, nothingSent: true}, Forecast{DirectP2P: "unknown", TURNRequired: true}},
 		{"adm", Verdict{Type: AddressDependentMapping}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
 		{"apdm", Verdict{Type: AddressPortDependentMapping}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
 		{"unknown_mapping", Verdict{Type: Unknown}, Forecast{DirectP2P: "unknown"}},
