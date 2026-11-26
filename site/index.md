@@ -42,7 +42,7 @@ go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
 | `1`  | P2P-hostile (`unlikely` or `unknown`, with at least one mapped endpoint returned) |
 | `2`  | probe or flag error |
 
-`$? -ne 2`: tool ran; read the forecast only then. `$? -eq 0`: direct P2P available.
+Scripts that ask "did the tool run?" check `$? -ne 2`, and read `webrtc_forecast` only then. Scripts that ask "can I use direct P2P?" check `$? -eq 0`.
 
 ## Background
 
