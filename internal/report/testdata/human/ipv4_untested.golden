@@ -8,4 +8,4 @@ Probes:
 
 Filtering not tested.
 IPv4 not tested; this verdict covers IPv6 only.
-Hairpinning not tested (local socket setup or STUN probe failed).
+Hairpinning not tested (local socket setup or STUN probe failed, or --timeout ran out).

@@ -8,4 +8,4 @@ Probes:
 
 Filtering not tested.
 Servers share one IP, which cannot show mapping behavior. Use --server values on two different IPs.
-Hairpinning not tested (local socket setup or STUN probe failed).
+Hairpinning not tested (local socket setup or STUN probe failed, or --timeout ran out).

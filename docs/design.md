@@ -377,7 +377,7 @@ Verbose output emits coded warning constants in `warnings[]`:
 | Constant | Condition |
 |---|---|
 | `WarnFilteringSkippedNoChangeRequest` | Server didn't advertise `OTHER-ADDRESS` |
-| `WarnHairpinUntested` | Local socket allocation failed; hairpinning probe could not run |
+| `WarnHairpinUntested` | Local socket setup or STUN probe failed, or `--timeout` ran out; hairpinning not measured |
 
 No free-text warning strings.
 
@@ -408,13 +408,13 @@ Two local UDP sockets, parallel with mapping probes (≤200ms parallel cost in t
 1. Allocate sockets A and B.
 2. STUN-probe each in parallel against the first `--server` entry to obtain mapped endpoints `mA`, `mB`.
 3. From A, send a uniquely-tagged UDP packet to `mB`.
-4. Listen on B for `T_hairpin` (default 1s).
+4. Listen on B for `T_hairpin`: 1s, or two thirds of the time `--timeout` leaves after DNS when that is shorter (`TestProbeHairpinning_SizesToTimeLeft`).
 
 Result:
 
 - Tagged packet arrives → `hairpinning: true`
 - Timeout → `hairpinning: false`
-- A or B's STUN probe failed → `hairpinning: null` + `WarnHairpinUntested`
+- A or B's STUN probe failed, or `--timeout` ended before the listen did → `hairpinning: null` + `WarnHairpinUntested` (`TestRealHairpinRecv_DeadlineCutIsUntested`, `TestProbeHairpinning_ContextCutIsUntested`)
 
 Documented limitation: false-negative possible if the NAT applies port-restricted filtering on the hairpin path. Test case in `internal/probe/hairpin_test.go` simulates this scenario via the existing fake-responder pattern.
 
