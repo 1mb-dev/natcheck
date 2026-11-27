@@ -852,3 +852,66 @@ func TestClassify_NoNAT(t *testing.T) {
 		})
 	}
 }
+
+func TestClassify_MappingTest(t *testing.T) {
+	adm := []probe.Result{
+		ok("a", 3478, "203.0.113.45:51820", time.Millisecond),
+		ok("b", 3478, "203.0.113.45:51821", time.Millisecond),
+	}
+	eim := []probe.Result{
+		ok("a", 3478, "203.0.113.45:51820", time.Millisecond),
+		ok("b", 3478, "203.0.113.45:51820", time.Millisecond),
+	}
+	single := []probe.Result{ok("a", 3478, "203.0.113.45:51820", time.Millisecond), fail("b", 3478)}
+	v6One := ok("c", 3478, "[2001:db8::1]:51820", time.Millisecond)
+	v6ADM := []probe.Result{
+		ok("c", 3478, "[2001:db8::1]:51820", time.Millisecond),
+		ok("d", 3478, "[2001:db8::1]:51821", time.Millisecond),
+	}
+	mapping := func(test1, altIP, altEndpoint string) *probe.FilteringResult {
+		f := &probe.FilteringResult{Test1Mapped: netip.MustParseAddrPort(test1), Err: probe.ErrFilteringNotSupported}
+		if altIP != "" {
+			f.AltIPMapped = netip.MustParseAddrPort(altIP)
+		}
+		if altEndpoint != "" {
+			f.AltEndpointMapped = netip.MustParseAddrPort(altEndpoint)
+		}
+		return f
+	}
+	portDependent := mapping("203.0.113.45:40000", "203.0.113.45:40001", "203.0.113.45:40002")
+	addressOnly := mapping("203.0.113.45:40000", "203.0.113.45:40001", "203.0.113.45:40001")
+
+	cases := []struct {
+		name       string
+		results    []probe.Result
+		filtering  *probe.FilteringResult
+		wantType   NATType
+		wantADMOrS bool
+	}{
+		{"II and III differ: APDM", adm, portDependent, AddressPortDependentMapping, false},
+		{"II and III agree: ADM", adm, addressOnly, AddressDependentMapping, false},
+		{"II agrees with I: tests do not apply", adm, mapping("203.0.113.45:40000", "203.0.113.45:40000", "203.0.113.45:40000"), AddressDependentMapping, true},
+		{"II agrees with I, III differs: tests do not apply", adm, mapping("203.0.113.45:40000", "203.0.113.45:40000", "203.0.113.45:40002"), AddressDependentMapping, true},
+		{"Test III unanswered", adm, mapping("203.0.113.45:40000", "203.0.113.45:40001", ""), AddressDependentMapping, true},
+		{"no filtering run", adm, nil, AddressDependentMapping, true},
+		{"EIM stays EIM", eim, portDependent, EndpointIndependentMapping, false},
+		{"Unknown stays Unknown", single, portDependent, Unknown, false},
+		{"tested family decides", append(slices.Clone(adm), v6One), portDependent, AddressPortDependentMapping, false},
+		{"other family is ADM too", append(slices.Clone(adm), v6ADM...), portDependent, AddressDependentMapping, true},
+		{"tests ran on the other family", append(slices.Clone(adm), v6One), mapping("[2001:db8::1]:40000", "[2001:db8::1]:40001", "[2001:db8::1]:40002"), AddressDependentMapping, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Classify(tc.results, tc.filtering, nil)
+			if v.Type != tc.wantType {
+				t.Errorf("Type = %v, want %v", v.Type, tc.wantType)
+			}
+			if got := slices.Contains(v.Warnings, WarnADMOrStricter); got != tc.wantADMOrS {
+				t.Errorf("adm_or_stricter present = %v, want %v; warnings=%v", got, tc.wantADMOrS, v.Warnings)
+			}
+			if tc.wantType == AddressPortDependentMapping && (v.LegacyName != "symmetric" || v.Forecast.DirectP2P != "unlikely" || !v.Forecast.TURNRequired) {
+				t.Errorf("APDM verdict = %q %+v, want symmetric, unlikely, TURN", v.LegacyName, v.Forecast)
+			}
+		})
+	}
+}

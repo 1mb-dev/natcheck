@@ -105,6 +105,22 @@ func TestRun_Help(t *testing.T) {
 	if !strings.Contains(errOut, "Usage") {
 		t.Errorf("usage missing; errOut=%q", errOut)
 	}
+	// Five windows of half the 1.5s filtering cap.
+	if !strings.Contains(errOut, "add up to 3.75s") {
+		t.Errorf("--timeout help does not state the filtering worst case; errOut=%q", errOut)
+	}
+}
+
+func TestFilteringMaxDuration(t *testing.T) {
+	for budget, want := range map[time.Duration]time.Duration{
+		filteringTimeoutCap: 3750 * time.Millisecond,
+		time.Second:         2500 * time.Millisecond,
+		0:                   2500 * time.Millisecond,
+	} {
+		if got := probe.FilteringMaxDuration(budget); got != want {
+			t.Errorf("FilteringMaxDuration(%v) = %v, want %v", budget, got, want)
+		}
+	}
 }
 
 func TestRun_InvalidFlag(t *testing.T) {

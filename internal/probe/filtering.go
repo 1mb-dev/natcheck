@@ -21,13 +21,21 @@ import (
 // Server is the server whose mapping target the §4.4 sequence ran against
 // (echoed from the ProbeFiltering argument so consumers can attribute the
 // result without re-threading state).
+//
+// AltIPMapped and AltEndpointMapped are the mapped endpoints of RFC 5780 §4.3
+// Tests II and III, sent to OTHER-ADDRESS's IP with the target's port and to
+// OTHER-ADDRESS itself. Both are zero unless both tests got a reply; they can be
+// set when Err wraps ErrFilteringNotSupported
+// (TestProbeFiltering_MappingTestsAfterIgnoredChangeRequest).
 type FilteringResult struct {
-	Server        Server
-	Test1Mapped   netip.AddrPort
-	Test1Other    netip.AddrPort
-	Test2Received bool
-	Test3Received bool
-	Err           error
+	Server            Server
+	Test1Mapped       netip.AddrPort
+	Test1Other        netip.AddrPort
+	Test2Received     bool
+	Test3Received     bool
+	AltIPMapped       netip.AddrPort
+	AltEndpointMapped netip.AddrPort
+	Err               error
 }
 
 // ErrFilteringNotSupported is returned in FilteringResult.Err when the target
@@ -51,14 +59,37 @@ var errReadFailed = errors.New("read")
 // no route. The next resolved address may still work.
 var errSendFailed = errors.New("write")
 
+// filteringWindows is the most tests ProbeFiltering waits on: Test 1, Tests 2
+// and 3, then Tests II and III.
+const filteringWindows = 5
+
+// filteringWindow is each test's window for a ProbeFiltering timeout.
+func filteringWindow(timeout time.Duration) time.Duration {
+	if timeout/2 <= 0 {
+		return 500 * time.Millisecond
+	}
+	return timeout / 2
+}
+
+// FilteringMaxDuration is filteringWindows windows for timeout
+// (TestFilteringMaxDuration); ProbeFiltering runs at most Tests 1, 2, 3, II and
+// III, in turn (TestProbeFiltering_MappingTests), each bounded by one window
+// (TestSendBindingAndWait_SilenceEndsAtWindow).
+func FilteringMaxDuration(timeout time.Duration) time.Duration {
+	return filteringWindows * filteringWindow(timeout)
+}
+
 // ProbeFiltering runs RFC 5780 §4.4 against target, the address the mapping
-// probe of server reached. Resolving the host again could reach a host that did
+// probe of server reached, then §4.3 Tests II and III when OTHER-ADDRESS allows
+// them (mappingTestAllowed). Resolving the host again could reach a host that did
 // not advertise OTHER-ADDRESS, or an address with no route. Uses one unconnected
-// UDP socket for all three tests so (a) the NAT mapping stays stable across
+// UDP socket for every test so (a) the NAT mapping stays stable across
 // tests and (b) the socket can receive responses from the server's alt-IP/
 // alt-port sources (a connected UDP socket would filter those out). Each test
 // gets timeout/2, resent as sendBindingAndWait schedules; silence for the whole
-// window is the Test 2/3 verdict, not an error. No ctx: cli runs filtering
+// window is the Test 2/3 verdict, not an error. Tests II and III run last:
+// sending to OTHER-ADDRESS's IP opens an address-dependent filter for Test 2's
+// reply (TestProbeFiltering_MappingTests). No ctx: cli runs filtering
 // after the mapping probes and outside their --timeout context, so timeout is
 // its only bound.
 func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
@@ -83,10 +114,7 @@ func probeFilteringWith(listen func(network, address string) (net.PacketConn, er
 	}
 	defer func() { _ = conn.Close() }()
 
-	perTest := timeout / 2
-	if perTest <= 0 {
-		perTest = 500 * time.Millisecond
-	}
+	perTest := filteringWindow(timeout)
 
 	// Test 1: plain Binding.
 	t1, err := sendBindingAndWait(context.Background(), conn, remote, perTest, nil)
@@ -108,29 +136,129 @@ func probeFilteringWith(listen func(network, address string) (net.PacketConn, er
 	// Test 3: CHANGE-PORT.
 	t3, err3 := sendBindingAndWait(context.Background(), conn, remote, perTest, &changeRequestPayload{ip: false, port: true})
 
-	// Only silence is a filtering result. A failed send or read is a local
-	// fault (TestProbeFiltering_LocalFaultIsNotFiltering); any other failure is
-	// a reply that measured nothing.
+	res.Err = judgeFiltering(target, res.Test1Other, t2, err2, t3, err3)
+	switch {
+	case res.Err == nil:
+		res.Test2Received = t2 != nil
+		res.Test3Received = t3 != nil
+	case !errors.Is(res.Err, ErrFilteringNotSupported):
+		return res // a local fault: no later test can be trusted
+	}
+
+	if mappingTestAllowed(target, res.Test1Other) {
+		res.AltIPMapped, res.AltEndpointMapped = mappingTests(conn, target, res.Test1Other, perTest)
+	}
+	return res
+}
+
+// judgeFiltering returns nil when Tests 2 and 3 measured filtering. Only silence
+// is a filtering result. A failed send or read is a local fault
+// (TestProbeFiltering_LocalFaultIsNotFiltering); any other failure is a reply
+// that measured nothing.
+func judgeFiltering(target, other netip.AddrPort, t2 *bindingResult, err2 error, t3 *bindingResult, err3 error) error {
 	for _, err := range []error{err2, err3} {
 		switch {
 		case err == nil, errors.Is(err, errNoResponse):
 		case errors.Is(err, errReadFailed), errors.Is(err, errSendFailed):
-			res.Err = err
-			return res
+			return err
 		default:
-			res.Err = fmt.Errorf("%w: %w", ErrFilteringNotSupported, err)
-			return res
+			return fmt.Errorf("%w: %w", ErrFilteringNotSupported, err)
 		}
 	}
-
-	if changeRequestIgnored(target, res.Test1Other, t2, t3) {
-		res.Err = ErrFilteringNotSupported
-		return res
+	if changeRequestIgnored(target, other, t2, t3) {
+		return ErrFilteringNotSupported
 	}
-	res.Test2Received = t2 != nil
-	res.Test3Received = t3 != nil
+	return nil
+}
 
-	return res
+// mappingTestAllowed reports whether Tests II and III can measure anything and
+// may be sent. Apart from the hairpin tag, sent to the mapped endpoint a server
+// reports, they are the only packets natcheck sends to an address a server
+// chose, so OTHER-ADDRESS must be in the target's family and address scope: a
+// public server cannot aim them at a private, loopback, link-local or
+// special-purpose host (TestMappingTestAllowed). On the target's port, Tests II
+// and III would reach one endpoint and always agree.
+func mappingTestAllowed(target, other netip.AddrPort) bool {
+	t, o := target.Addr().Unmap(), other.Addr().Unmap()
+	switch {
+	case !other.IsValid(), other.Port() == 0, other.Port() == target.Port():
+		return false
+	case o.Is4() != t.Is4(), o.IsMulticast(), o.IsUnspecified():
+		return false
+	}
+	for _, p := range embedsIPv4Prefixes {
+		if p.Contains(o) {
+			return false
+		}
+	}
+	scope := addrScope(o)
+	if o.Is6() && scope == scopePublic && !globalUnicast6.Contains(o) {
+		return false
+	}
+	return scope == addrScope(t)
+}
+
+// globalUnicast6 is the only IPv6 space a public OTHER-ADDRESS may be in.
+// Outside it lie unassigned space, discard-only 100::/64, and the
+// IPv4-compatible ::/96 and SIIT ::ffff:0:0:0/96 forms, which Unmap does not
+// convert (TestMappingTestAllowed).
+var globalUnicast6 = netip.MustParsePrefix("2000::/3")
+
+// embedsIPv4Prefixes carry an IPv4 address that a gateway or this host's own
+// tunnel sends to (NAT64, Teredo, 6to4), so the prefix hides that address's
+// scope: a target in the same prefix does not make it safe.
+var embedsIPv4Prefixes = []netip.Prefix{
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("2001::/32"),
+	netip.MustParsePrefix("2002::/16"),
+}
+
+// specialPrefixes are special-purpose ranges that the checks in addrScope
+// would otherwise count as public. Each is its own scope.
+var specialPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("fec0::/10"),
+}
+
+func addrScope(a netip.Addr) int {
+	switch {
+	case a.IsLoopback():
+		return 0
+	case a.IsLinkLocalUnicast():
+		return 1
+	case a.IsPrivate():
+		return 2
+	}
+	for i, p := range specialPrefixes {
+		if p.Contains(a) {
+			return 4 + i
+		}
+	}
+	return scopePublic
+}
+
+const scopePublic = 3
+
+// mappingTests runs RFC 5780 §4.3 Tests II and III on conn. It returns zero
+// endpoints unless both got a reply; Test III is skipped when Test II failed
+// (TestProbeFiltering_MappingTestsNeedBothReplies).
+func mappingTests(conn net.PacketConn, target, other netip.AddrPort, wait time.Duration) (altIP, altEndpoint netip.AddrPort) {
+	altIPTarget := netip.AddrPortFrom(other.Addr().Unmap(), target.Port())
+	t2, err := sendBindingAndWait(context.Background(), conn, net.UDPAddrFromAddrPort(altIPTarget), wait, nil)
+	if err != nil {
+		return netip.AddrPort{}, netip.AddrPort{}
+	}
+	t3, err := sendBindingAndWait(context.Background(), conn, net.UDPAddrFromAddrPort(other), wait, nil)
+	if err != nil {
+		return netip.AddrPort{}, netip.AddrPort{}
+	}
+	return t2.mapped, t3.mapped
 }
 
 // changeRequestIgnored reports whether a Test 2 or Test 3 reply lacks the change

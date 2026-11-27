@@ -347,6 +347,32 @@ func fixtureNoNAT() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 	return classify.Classify(probes, nil, nil), probes, nil
 }
 
+func fixtureMappingTestAPDM() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.example.org", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.10:3478"),
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			Other:  netip.MustParseAddrPort("198.51.100.1:3479"),
+			RTT:    18 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.20:19302"),
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51824"),
+			RTT:    24 * time.Millisecond,
+		},
+	}
+	f := &probe.FilteringResult{
+		Server:            probe.Server{Host: "stun.example.org", Port: 3478},
+		Test1Mapped:       netip.MustParseAddrPort("203.0.113.45:51830"),
+		Test1Other:        netip.MustParseAddrPort("198.51.100.1:3479"),
+		AltIPMapped:       netip.MustParseAddrPort("203.0.113.45:51831"),
+		AltEndpointMapped: netip.MustParseAddrPort("203.0.113.45:51832"),
+	}
+	return classify.Classify(probes, f, nil), probes, f
+}
+
 // compareGolden loads want from path and diff-compares against got. Set
 // NATCHECK_UPDATE_GOLDEN=1 to (re)generate the golden file from got.
 func compareGolden(t *testing.T, path string, got []byte) {
@@ -399,6 +425,7 @@ func TestRender_Golden(t *testing.T) {
 		{"hairpinning_not_detected", fixtureHairpinningNotDetected},
 		{"hairpinning_untested", fixtureHairpinningUntested},
 		{"no_nat", fixtureNoNAT},
+		{"mapping_test_apdm", fixtureMappingTestAPDM},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

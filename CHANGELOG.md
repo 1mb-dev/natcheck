@@ -7,9 +7,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
 ### Added
 
 - Warning `no_nat` when every successful probe maps to this host's own address and the port it left from; the NAT type and forecast are unchanged (#39).
+- RFC 5780 §4.3 Tests II and III, run after the filtering tests when `OTHER-ADDRESS` passes the checks in [`docs/design.md` § Mapping tests](docs/design.md#mapping-tests-rfc-5780-43) (#41).
 
 ### Changed
 
+- An ADM verdict reads `APDM` when Tests II and III map differently, and drops `adm_or_stricter` either way, if both replied, Test II mapped differently from Test 1, and the other address family's successful probes, if any, classify Unknown (#41).
 - `cgnat_detected` text says the server sits inside a carrier or overlay network and the NAT beyond it is not measured; forecast and exit code are unchanged (#53).
 
 ### Fixed
@@ -20,6 +22,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - When no probe gets a usable mapping but a server replies to a request, such as with an error response or a success with no mapped address, `direct_p2p` reads `unknown` instead of `unlikely` and `turn_required` reads `false` instead of `true`; the exit code stays 2 (#49).
 - A filtering or hairpinning read that fails for any reason but its deadline no longer counts as no reply: filtering stays untested instead of reading stricter, and hairpinning reads `null` with `hairpin_untested` instead of `false`.
 - A filtering CHANGE-REQUEST that fails to send now warns `filtering_behavior_not_tested` instead of `filtering_skipped_no_change_request`.
+- `--timeout` help states the longest the RFC 5780 tests can add, 3.75s, instead of 1.5s.
 
 ## [0.1.6] — 2026-11-26
 

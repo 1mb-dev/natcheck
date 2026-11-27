@@ -60,7 +60,7 @@ CGNAT behaviour varies by carrier. Some run permissive EIM CGNATs that hole-punc
 
 1. Send STUN Binding requests to two or more STUN servers on different IPs from the same local port.
 2. Same mapped public `IP:port` across servers → EIM. Hole-punching friendly.
-3. Different mapped ports → ADM or APDM. Distinguishing them requires RFC 5780's `CHANGE-REQUEST` attribute, which most public STUN servers don't support.
+3. Different mapped ports → ADM or APDM. Distinguishing them needs a server that advertises RFC 5780's `OTHER-ADDRESS`, which most public STUN servers don't.
 4. Behind a carrier NAT, steps 2 and 3 measure every NAT on the path, the carrier's included. A mapped address in `100.64.0.0/10` means the server sits inside a carrier or overlay network, so the NAT beyond it was not measured.
 
 [natcheck](https://github.com/1mb-dev/natcheck) runs this probe and reports a direct-P2P forecast with exit codes a CI job can act on. Any STUN client plus the steps above works if you prefer to do it by hand.

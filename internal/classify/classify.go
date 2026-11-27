@@ -29,14 +29,13 @@ const (
 	EndpointIndependentMapping
 
 	// AddressDependentMapping: mapped endpoint varies by destination address.
-	// RFC 5780. v0.1 reports this for any case where mapped endpoints differ
-	// across servers; ADM vs APDM cannot be distinguished without
-	// CHANGE-REQUEST.
+	// RFC 5780. Mapped endpoints that differ across servers read ADM with
+	// adm_or_stricter, unless applyMappingTest refines it.
 	AddressDependentMapping
 
 	// AddressPortDependentMapping: mapped endpoint varies by destination
-	// address and port. RFC 5780. Legacy term "symmetric". v0.1 does not
-	// emit this category directly (see AddressDependentMapping note).
+	// address and port. RFC 5780. Legacy term "symmetric". Only
+	// applyMappingTest assigns it.
 	AddressPortDependentMapping
 
 	// Blocked: no probe succeeded. Network rejects outbound STUN, all target
@@ -177,6 +176,7 @@ var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 func Classify(results []probe.Result, filtering *probe.FilteringResult, hairpinning *probe.HairpinningResult) Verdict {
 	v := classifyMapping(results)
 	applyFiltering(&v, filtering)
+	applyMappingTest(&v, results, filtering)
 	applyHairpinning(&v, hairpinning)
 	v.Forecast = decideForecast(v)
 	return v
@@ -416,6 +416,37 @@ func applyFiltering(v *Verdict, f *probe.FilteringResult) {
 	}
 	v.FilteringTestedAgainst = f.Server
 	v.Warnings = removeWarning(v.Warnings, WarnFilteringBehaviorNotTested)
+}
+
+// applyMappingTest refines an ADM verdict with RFC 5780 §4.3 Tests II and III,
+// which differ only in destination port: different mappings make it APDM, equal
+// ones leave ADM; either way adm_or_stricter drops. As in RFC 5780, they apply
+// only when Test II's mapping differs from Test I's. They never produce EIM and
+// never replace Unknown (TestClassify_MappingTest). Verdicts combine families,
+// so they apply only when the other family's probes alone classify Unknown.
+func applyMappingTest(v *Verdict, results []probe.Result, f *probe.FilteringResult) {
+	if f == nil || !f.AltIPMapped.IsValid() || !f.AltEndpointMapped.IsValid() || f.AltIPMapped == f.Test1Mapped || v.Type != AddressDependentMapping {
+		return
+	}
+	is4 := f.Test1Mapped.Addr().Is4()
+	var tested, rest []probe.Result
+	for _, r := range results {
+		if r.Err != nil || !r.Mapped.IsValid() {
+			continue
+		}
+		if r.Mapped.Addr().Is4() == is4 {
+			tested = append(tested, r)
+		} else {
+			rest = append(rest, r)
+		}
+	}
+	if len(tested) == 0 || (len(rest) > 0 && classifyGroup(rest).Type != Unknown) {
+		return
+	}
+	if f.AltIPMapped != f.AltEndpointMapped {
+		v.Type = AddressPortDependentMapping
+	}
+	v.Warnings = removeWarning(v.Warnings, WarnADMOrStricter)
 }
 
 // decideForecast computes the WebRTC forecast from a fully-populated Verdict.
