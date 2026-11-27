@@ -41,8 +41,8 @@ Public endpoint: 203.0.113.45:51820
 Hairpinning: false
 
 Probes:
-  stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
-  stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
+  stun.l.google.com:19302 (192.0.2.10)   rtt=24ms  mapped=203.0.113.45:51820
+  stun.cloudflare.com:3478 (192.0.2.20)  rtt=31ms  mapped=203.0.113.45:51820
 
 Filtering not tested.
 ```
@@ -58,7 +58,7 @@ Pointing `--server` at a STUN server that advertises `OTHER-ADDRESS` (e.g. cotur
 | `--json` | Emit JSON instead of human-readable report |
 | `--verbose` | Log each STUN transaction to stderr |
 | `--server host:port` | Add a custom STUN server (repeatable; overrides defaults) |
-| `--timeout duration` | Total probe timeout (default `5s`) |
+| `--timeout duration` | Mapping-probe timeout (default `5s`); filtering and mapping tests add up to 3.75s when a server advertises `OTHER-ADDRESS` |
 | `--version` | Print version and exit |
 | `--help` | Print flag reference |
 
@@ -67,8 +67,8 @@ Pointing `--server` at a STUN server that advertises `OTHER-ADDRESS` (e.g. cotur
 | Code | Meaning | When |
 |------|---------|------|
 | `0` | P2P-friendly | `Direct P2P: likely` or `possible` |
-| `1` | P2P-hostile | `Direct P2P: unlikely` or `unknown`, with at least one mapped endpoint returned |
-| `2` | Probe or flag error | All probes failed, invalid flag, or bad `--server` |
+| `1` | P2P-hostile | `Direct P2P: unlikely` or `unknown`, unless code 2 applies |
+| `2` | Probe or flag error | All probes failed, no probe mapped to IPv4 though IPv4 requests left the host ([details](docs/design.md#address-families)), invalid flag, or bad `--server` |
 
 Scripts that ask "did the tool run?" check `$? -ne 2`, and read `webrtc_forecast` only then. Scripts that ask "can I use direct P2P?" check `$? -eq 0`.
 
@@ -86,7 +86,7 @@ elif [ "$code" -ne 0 ]; then
 fi
 ```
 
-The `--json` schema (`nat_type`, `public_endpoint`, `probes[]`, `webrtc_forecast`, `warnings[]`, `filtering`, `hairpinning`) is a public contract from v0.1 onward — additive changes only after release. Real captures live under [`docs/samples/`](docs/samples/).
+The `--json` schema (`nat_type`, `nat_type_legacy`, `public_endpoint`, `probes[]`, `webrtc_forecast`, `warnings[]`, `filtering`, `hairpinning`, `address_families`) is a public contract: changes are additive, except that a warning ID may retire, named in the CHANGELOG entry that retires it. Values and warning IDs are listed in [`docs/design.md`](docs/design.md#json-values). Real captures live under [`docs/samples/`](docs/samples/).
 
 ## Scope
 

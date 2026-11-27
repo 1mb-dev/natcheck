@@ -76,12 +76,13 @@ $ natcheck
 Direct P2P: possible
 NAT type: Endpoint-Independent Mapping (cone)
 Public endpoint: 203.0.113.45:51820
+Hairpinning: false
 
 Probes:
-  stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
-  stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
+  stun.l.google.com:19302 (192.0.2.10)   rtt=24ms  mapped=203.0.113.45:51820
+  stun.cloudflare.com:3478 (192.0.2.20)  rtt=31ms  mapped=203.0.113.45:51820
 
-Filtering not tested (v0.1).
+Filtering not tested.
 ```
 
 Forecast leads the output so the WebRTC-dev persona gets the answer on line 1. Classification detail follows for the curious reader.
@@ -94,15 +95,51 @@ Forecast leads the output so the WebRTC-dev persona gets the answer on line 1. C
   "nat_type_legacy": "cone",
   "public_endpoint": "203.0.113.45:51820",
   "probes": [
-    {"server": "stun.l.google.com:19302", "target": "192.0.2.10:19302", "rtt_ms": 24, "mapped": "203.0.113.45:51820"},
-    {"server": "stun.cloudflare.com:3478", "target": "192.0.2.20:3478", "rtt_ms": 31, "mapped": "203.0.113.45:51820"}
+    {
+      "server": "stun.l.google.com:19302",
+      "target": "192.0.2.10:19302",
+      "rtt_ms": 24,
+      "mapped": "203.0.113.45:51820"
+    },
+    {
+      "server": "stun.cloudflare.com:3478",
+      "target": "192.0.2.20:3478",
+      "rtt_ms": 31,
+      "mapped": "203.0.113.45:51820"
+    }
   ],
-  "webrtc_forecast": {"direct_p2p": "possible", "turn_required": false},
-  "warnings": ["filtering_behavior_not_tested"]
+  "webrtc_forecast": {
+    "direct_p2p": "possible",
+    "turn_required": false
+  },
+  "warnings": [
+    "filtering_behavior_not_tested"
+  ],
+  "filtering": {
+    "behavior": "untested"
+  },
+  "hairpinning": false,
+  "address_families": {
+    "ipv4": {
+      "nat_type": "EIM",
+      "nat_type_legacy": "cone",
+      "public_endpoint": "203.0.113.45:51820",
+      "webrtc_forecast": {
+        "direct_p2p": "possible",
+        "turn_required": false
+      },
+      "filtering": {
+        "behavior": "untested"
+      },
+      "warnings": [
+        "filtering_behavior_not_tested"
+      ]
+    }
+  }
 }
 ```
 
-The JSON schema is a public contract from v0.1 onward; only additive changes after release.
+The JSON schema is a public contract: changes are additive, except that a warning ID may retire, named in the CHANGELOG entry that retires it. Values and warning IDs are listed under JSON values.
 
 ### Failure modes
 
@@ -206,14 +243,16 @@ const (
 )
 
 type Verdict struct {
-    Type            NATType
-    LegacyName      string    // "cone", "symmetric", etc.
-    PublicEndpoint  netip.AddrPort
-    CGNAT           bool
-    FilteringTested bool      // false in v0.1 always
-    Warnings        []string
-    Forecast        Forecast
-    IPv4, IPv6      *Verdict  // per-family verdicts; nil when absent (see Address families)
+    Type                   NATType
+    LegacyName             string            // "cone", "symmetric", or empty
+    PublicEndpoint         netip.AddrPort
+    CGNAT                  bool
+    Filtering              FilteringBehavior // untested unless the RFC 5780 §4.4 sequence measured a behavior
+    FilteringTestedAgainst probe.Server
+    Hairpinning            *bool             // nil when not tested
+    Warnings               []string
+    Forecast               Forecast
+    IPv4, IPv6             *Verdict          // per-family verdicts; nil when absent (see Address families)
 }
 
 type Forecast struct {
@@ -239,7 +278,7 @@ const (
 func Render(w io.Writer, v classify.Verdict, probes []probe.Result, format Format) error
 ```
 
-Human format is hand-rolled string building, forecast-first. JSON format uses `encoding/json` with tagged structs, pinned by golden-file tests (EIM cone, ADM strict, Blocked) since the schema is a public contract.
+Human format is hand-rolled string building, forecast-first. JSON format uses `encoding/json` with tagged structs, pinned by golden-file tests since the schema is a public contract (`TestRender_Golden`).
 
 ### `internal/cli`
 
@@ -275,7 +314,7 @@ With only basic STUN Binding responses (no `CHANGE-REQUEST`), we can determine:
 
 Mappings that agree across fewer than two server IPs read `Unknown` with warning `insufficient_server_diversity`: one IP cannot separate EIM from ADM.
 
-When every successful probe of an address family maps to one of this host's interface addresses with the port it left from, the warning `no_nat` reports that nothing on that family's path translated it. One probe is enough. The type, legacy name and forecast stay those of the mapping (`TestClassify_NoNAT`, `TestProbe_Untranslated`, `TestRun_MappingBehaviorOverRealSockets`).
+When every compared probe of an address family maps to one of this host's interface addresses with the port it left from, the warning `no_nat` reports that nothing on that family's path translated it. One probe is enough. The type, legacy name and forecast stay those of the mapping (`TestClassify_NoNAT`, `TestProbe_Untranslated`, `TestRun_MappingBehaviorOverRealSockets`).
 
 Filtering needs `CHANGE-REQUEST`, covered below.
 
@@ -285,7 +324,7 @@ Probes are grouped by the family of their mapped address, and each family gets i
 
 The top-level verdict is IPv4's: a peer without IPv6 depends on it. IPv6's verdict is the top level only when IPv4 is absent, with warning `ipv4_untested`. IPv4 is absent when no probe mapped to IPv4 and no IPv4 request left the host. When no probe mapped to IPv4 but IPv4 requests left the host, the IPv4 family is Blocked and decides as in an IPv4-only run. An IPv6 family whose requests got no mapping is absent (`TestClassify_AddressFamilies`).
 
-When both families are present and their forecasts differ, warning `address_families_disagree` names both. The top level carries the deciding family's filtering warnings and `adm_or_stricter`, `insufficient_probes`, `insufficient_server_diversity` and `cgnat_detected` from either family, and `no_nat` when every present family has it (`TestClassify_AddressFamilies`).
+When both families are present and their forecasts differ, warning `address_families_disagree` names both. The top level carries the deciding family's filtering warnings and `adm_or_stricter`; `insufficient_probes`, `insufficient_server_diversity` and `cgnat_detected` from either family; and `no_nat` when every present family has it (`TestClassify_AddressFamilies`).
 
 ## CGNAT detection
 
@@ -305,9 +344,9 @@ Probes run concurrently under a single context timeout, one goroutine per server
 
 - **`internal/probe`:** integration tests against an in-process fake STUN responder (spawned per-test). No network required in CI.
 - **`internal/classify`:** table-driven unit tests covering every combination of probe outcomes, including the partial-failure matrix (0/2, 1/2 both orderings, 2/2).
-- **`internal/report`:** golden-file tests for human output; schema-stability golden-file tests for JSON with three fixtures (EIM cone, ADM strict, Blocked).
+- **`internal/report`:** golden-file tests, each fixture rendered as human output and as JSON (`TestRender_Golden`).
 - **`internal/cli`:** in-process test with a fake `Prober` for exit codes and orchestration, plus real-socket mapping tests through a simulated NAT, since a stub cannot observe which local socket a probe left from.
-- **`cmd/natcheck`:** no test; entry point is three lines.
+- **`cmd/natcheck`:** `resolveVersion` only (`TestResolveVersion_LdflagsOverride`).
 
 No live-network test in CI. Manual verification against real networks before release; sample outputs committed under `docs/samples/`.
 
@@ -316,13 +355,12 @@ No live-network test in CI. Manual verification against real networks before rel
 - `make build` → single binary in repo root, versioned via `-ldflags "-X main.version=..."`
 - `make test` → unit + integration with in-process test server, no network
 - `make lint` → `golangci-lint`
-- Release: `git tag v0.1.0`, push.
 
 ## Non-functional targets
 
 - Cold-start probe completes in < 2s on a healthy network
 - Binary size < 15 MB static
-- `--json` schema is a public contract; additive changes only after v0.1
+- `--json` schema is a public contract (see JSON invocation)
 - `go install github.com/1mb-dev/natcheck/cmd/natcheck@latest` works with no further setup
 
 ## Security considerations
@@ -354,7 +392,7 @@ RFC 5780 parity with `pion/stun-nat-behaviour` on protocol rigor while preservin
 | **v0.1.6** | Filtering runs against the address the mapping probe reached; hairpinning falls through to the next resolved address; `unknown` forecast when no request left the host |
 | **Unreleased** | RFC 5780 §4.3 mapping tests; warning `no_nat`; both address families probed, verdict from IPv4, JSON `address_families`; timeout, retransmission and reply-handling fixes |
 
-## JSON schema delta (additive only)
+## JSON schema delta
 
 ```jsonc
 {
@@ -396,15 +434,27 @@ A v0.1-equivalent golden fixture (filtering=untested, hairpinning=null) is pinne
 
 Filtering activates automatically when the configured server's Binding response includes `OTHER-ADDRESS`. Hairpinning runs by default — local-only, parallel with mapping probes, no wall-clock cost in the common case.
 
-Verbose output emits coded warning constants in `warnings[]`:
+## JSON values
 
-| Constant | Condition |
+`nat_type` is `EIM`, `ADM`, `APDM`, `Unknown` or `Blocked`; `nat_type_legacy` is `cone`, `symmetric` or empty. `webrtc_forecast.direct_p2p` is `likely`, `possible`, `unlikely` or `unknown`. `filtering.behavior` is `endpoint-independent`, `address-dependent`, `address-and-port-dependent` or `untested`; `hairpinning` is `true`, `false` or `null`. `address_families` is `{}` when no probe got a mapping; the top level then carries the result (`TestRender_Golden`, `blocked`).
+
+`warnings[]` holds only these IDs, with or without `--verbose`. Each family's warnings are under `address_families`; which reach the top level is stated in Address families.
+
+| Warning | When |
 |---|---|
-| `WarnFilteringSkippedNoChangeRequest` | Server didn't advertise `OTHER-ADDRESS` |
-| `WarnHairpinUntested` | Hairpinning not measured; see Hairpinning detection |
-| `WarnAddressFamiliesDisagree` | The address families' forecasts differ; see Address families |
+| `all_probes_failed` | No probe got a mapping, or, in `address_families.ipv4`, IPv4 requests left and no probe mapped to IPv4 (Failure modes, Address families; `TestClassify`, `TestRender_Golden`, `ipv4_silent`) |
+| `adm_or_stricter` | Mapped endpoints differ across servers and Tests II and III did not refine the verdict (RFC 5780 mapping classification; `TestClassify_MappingTest`) |
+| `insufficient_probes` | The family has only one compared probe (`TestClassify`) |
+| `insufficient_server_diversity` | Mappings agree across fewer than two server IPs (RFC 5780 mapping classification; `TestClassify_ServerDiversity`) |
+| `cgnat_detected` | The family's first mapped address is in `100.64.0.0/10` (CGNAT detection; `TestClassify`) |
+| `no_nat` | Every compared probe of the family mapped to one of this host's interface addresses with the port it left from (RFC 5780 mapping classification; `TestClassify_NoNAT`) |
+| `filtering_behavior_not_tested` | Filtering did not run in the family, or ran without a result other than `filtering_skipped_no_change_request` (Filtering classification; `TestClassify_FilteringMatrix`) |
+| `filtering_skipped_no_change_request` | Filtering ran and the Test 1 reply lacked `OTHER-ADDRESS`, or the server ignored or rejected `CHANGE-REQUEST` (Filtering classification; `TestClassify_FilteringMatrix`) |
+| `address_families_disagree` | Both families are present and their forecasts differ (Address families; `TestClassify_AddressFamilies`) |
+| `ipv4_untested` | IPv4 is absent and the verdict is IPv6's (Address families; `TestClassify_IPv4UntestedWarning`) |
+| `hairpin_untested` | `hairpinning` is `null` (Hairpinning detection; `TestRender_Golden`, `hairpinning_untested`) |
 
-No free-text warning strings.
+Retired: `mixed_address_family_probes`; each family is reported under `address_families`.
 
 ## Filtering classification
 
@@ -426,7 +476,7 @@ Each test waits half the filtering budget (750ms by default). When that window i
 
 A Test 2 or Test 3 reply that lacks the change asked for, or an error reply, means the server ignored or rejected `CHANGE-REQUEST`, so neither test measured anything and filtering stays untested. Replies are compared to the target, not `OTHER-ADDRESS`, because provider topologies can reply from an address other than the advertised one.
 
-If the server doesn't advertise `OTHER-ADDRESS`, all filtering tests skip; `WarnFilteringSkippedNoChangeRequest` is emitted; `filtering.behavior = "untested"`.
+If no compared probe's server advertised `OTHER-ADDRESS`, filtering does not run: `filtering.behavior` is `untested` with warning `filtering_behavior_not_tested`. When filtering runs and its Test 1 reply lacks `OTHER-ADDRESS`, or the server ignores or rejects `CHANGE-REQUEST`, the result is `untested` with `filtering_skipped_no_change_request` (`TestClassify_FilteringMatrix`, `TestProbeFiltering_NoOtherAddress`, `TestProbeFiltering_ServerIgnoresChangeRequest`, `TestProbeFiltering_ServerRejectsChangeRequest`).
 
 ### Mapping tests (RFC 5780 §4.3)
 
@@ -449,8 +499,8 @@ Result:
 
 - Tagged packet arrives → `hairpinning: true`
 - Timeout → `hairpinning: false`
-- A or B's STUN probe failed, a listen read failed for a reason other than its deadline, or `--timeout` ended before the listen did → `hairpinning: null` + `WarnHairpinUntested` (`TestRealHairpinRecv_ReadErrorIsNotFalse`, `TestRealHairpinRecv_DeadlineCutIsUntested`, `TestProbeHairpinning_ContextCutIsUntested`)
-- `mB` fails the family, scope and never-block checks in Mapping tests above → no tag is sent; `hairpinning: null` + `WarnHairpinUntested` (`TestHairpinAddrs_MappedOutsideScopeSendsNothing`)
+- Not measured → `hairpinning: null` + `hairpin_untested`, when: the server did not resolve; no resolved address got two local sockets that bind and send (`TestHairpinAddrs_EveryAddressFails`); A or B's STUN probe failed (`TestProbeHairpinning_STUNFailure`); the tag send from A to `mB` failed (`TestProbeHairpinning_SendOracleError`); a listen read failed for a reason other than its deadline (`TestRealHairpinRecv_ReadErrorIsNotFalse`); or `--timeout` ended before the listen did (`TestRealHairpinRecv_DeadlineCutIsUntested`, `TestProbeHairpinning_ContextCutIsUntested`)
+- `mB` fails the family, scope and never-block checks in Mapping tests above → no tag is sent; `hairpinning: null` + `hairpin_untested` (`TestHairpinAddrs_MappedOutsideScopeSendsNothing`)
 
 Documented limitation: false-negative possible if the NAT applies port-restricted filtering on the hairpin path. Test case in `internal/probe/hairpin_test.go` simulates this scenario via the existing fake-responder pattern.
 

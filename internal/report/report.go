@@ -2,8 +2,8 @@
 //
 // The human format is hand-rolled and forecast-first: the Direct P2P line
 // leads so the WebRTC-developer persona gets the answer on line 1. The JSON
-// format is a public contract pinned by golden-file tests; only additive
-// changes are permitted after v0.1. See docs/design.md §UX shape.
+// format is a public contract pinned by golden-file tests (TestRender_Golden);
+// see docs/design.md § JSON invocation.
 package report
 
 import (
@@ -21,7 +21,7 @@ const (
 	// FormatHuman produces a screen-friendly report leading with the forecast.
 	FormatHuman Format = iota
 	// FormatJSON produces the machine-readable report. The schema is a public
-	// contract from v0.1 onward; only additive changes permitted.
+	// contract (docs/design.md § JSON invocation).
 	FormatJSON
 )
 
