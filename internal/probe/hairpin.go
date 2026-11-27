@@ -15,8 +15,9 @@ import (
 // detection probe. Detected is tri-state:
 //
 //   - nil: probe could not run end-to-end (socket allocation, DNS, or per-socket
-//     STUN probe failed); Err describes the underlying cause. Callers should
-//     emit WarnHairpinUntested at the classifier layer.
+//     STUN probe failed, or ctx ended before the listen window did); Err
+//     describes the underlying cause. Callers should emit WarnHairpinUntested
+//     at the classifier layer.
 //   - &true: tagged loopback packet arrived on socket B; the NAT supports
 //     hairpinning for the (A→mB) path.
 //   - &false: listen window elapsed with no tagged packet; either no hairpinning
@@ -36,16 +37,20 @@ type HairpinningResult struct {
 //  1. Allocate sockets A and B, unconnected, address family inherited from the
 //     resolved server IP.
 //  2. STUN-probe each socket in parallel against `server` to learn mapped
-//     endpoints mA and mB. Single-shot per probe — no retries. The wall-clock
-//     budget below depends on this.
+//     endpoints mA and mB.
 //  3. Send a 16-byte random nonce from A to mB.
 //  4. Listen on B for the nonce. Timeout: T_hairpin (= `timeout`).
 //
-// Wall-clock budget: STUN phase (parallel) caps at min(timeout/2, 500ms);
-// listen phase consumes up to `timeout`. Total ≤ 1.5 × timeout in the worst
-// case. The caller orchestrates this in parallel with mapping probes; the
-// non-functional target at docs/design.md (<2s cold-start) is preserved
-// for timeout ≤ 1s.
+// Wall-clock budget, after resolving the server: STUN phase (parallel) caps at
+// min(timeout/2, 500ms); listen phase consumes up to `timeout`. Total ≤ 1.5 ×
+// timeout in the worst case. Under a ctx deadline, timeout is first cut to two
+// thirds of the time left, so the deadline ends the listen early only when more
+// than a third passes before the listen starts: a STUN reply near the end of
+// its window, or an address that failed after its other socket waited
+// (TestProbeHairpinning_SizesToTimeLeft,
+// TestRealHairpinRecv_DeadlineCutIsUntested). The caller orchestrates this in
+// parallel with mapping probes; the non-functional target at docs/design.md
+// (<2s cold-start) is preserved for timeout ≤ 1s.
 func ProbeHairpinning(ctx context.Context, server Server, timeout time.Duration) HairpinningResult {
 	return probeHairpinning(ctx, server, timeout, realHairpinSend, realHairpinRecv)
 }
@@ -80,6 +85,15 @@ func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout 
 	listen func(network, address string) (net.PacketConn, error), send hairpinSender, recv hairpinReceiver) HairpinningResult {
 	res := HairpinningResult{Server: server}
 
+	if dl, ok := ctx.Deadline(); ok {
+		if left := time.Until(dl) * 2 / 3; left < timeout {
+			if left <= 0 {
+				res.Err = context.DeadlineExceeded
+				return res
+			}
+			timeout = left
+		}
+	}
 	perProbe := timeout / 2
 	if perProbe <= 0 || perProbe > 500*time.Millisecond {
 		perProbe = 500 * time.Millisecond
@@ -93,12 +107,12 @@ func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout 
 			return res
 		}
 		ip = ip.Unmap()
-		p, err := listenPair(ctx, ip, listen)
+		p, err := listenPair(ip, listen)
 		if err != nil {
 			res.Err = err
 			continue
 		}
-		mappedB, err = p.mappedB(net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, uint16(server.Port))), perProbe)
+		mappedB, err = p.mappedB(ctx, net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, uint16(server.Port))), perProbe)
 		if err == nil {
 			pair = p
 			break
@@ -138,13 +152,9 @@ func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout 
 // hairpinPair is sockets A and B in one address family.
 type hairpinPair struct {
 	a, b net.PacketConn
-	done chan struct{}
 }
 
-// listenPair binds both sockets and bridges ctx.Done() to their deadlines, so
-// a cancel-without-deadline context unblocks in-flight reads and writes
-// promptly.
-func listenPair(ctx context.Context, ip netip.Addr, listen func(network, address string) (net.PacketConn, error)) (*hairpinPair, error) {
+func listenPair(ip netip.Addr, listen func(network, address string) (net.PacketConn, error)) (*hairpinPair, error) {
 	network, listenAddr := pickNetwork(ip)
 	a, err := listen(network, listenAddr)
 	if err != nil {
@@ -155,33 +165,22 @@ func listenPair(ctx context.Context, ip netip.Addr, listen func(network, address
 		_ = a.Close()
 		return nil, fmt.Errorf("listen socket B: %w", err)
 	}
-	p := &hairpinPair{a: a, b: b, done: make(chan struct{})}
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = a.SetDeadline(time.Unix(1, 0))
-			_ = b.SetDeadline(time.Unix(1, 0))
-		case <-p.done:
-		}
-	}()
-	return p, nil
+	return &hairpinPair{a: a, b: b}, nil
 }
 
-// close stops the ctx bridge before closing the sockets.
 func (p *hairpinPair) close() {
-	close(p.done)
 	_ = p.a.Close()
 	_ = p.b.Close()
 }
 
 // mappedB STUN-probes both sockets in parallel and returns B's mapped endpoint.
-func (p *hairpinPair) mappedB(remote net.Addr, perProbe time.Duration) (netip.AddrPort, error) {
+func (p *hairpinPair) mappedB(ctx context.Context, remote net.Addr, perProbe time.Duration) (netip.AddrPort, error) {
 	type probeOut struct {
 		mapped netip.AddrPort
 		err    error
 	}
 	probeSocket := func(c net.PacketConn, ch chan<- probeOut) {
-		r, err := sendBindingAndWait(c, remote, perProbe, nil)
+		r, err := sendBindingAndWait(ctx, c, remote, perProbe, nil)
 		if err != nil {
 			ch <- probeOut{err: err}
 			return
@@ -213,21 +212,22 @@ func realHairpinSend(ctx context.Context, from net.PacketConn, to netip.AddrPort
 	return err
 }
 
+// realHairpinRecv returns ctx's error, not false, when a read fails with ctx
+// done before the window's end: nothing was measured
+// (TestProbeHairpinning_ContextCutIsUntested). A read that fails after the end
+// reads false even with ctx done (TestRealHairpinRecv_FullWindowReadsFalseAfterCtxEnds).
 func realHairpinRecv(ctx context.Context, on net.PacketConn, tag []byte, timeout time.Duration) (bool, error) {
 	end := time.Now().Add(timeout)
-	if deadline, ok := ctx.Deadline(); ok && deadline.Before(end) {
-		end = deadline
-	}
 	buf := make([]byte, 64)
 	for {
 		if time.Until(end) <= 0 {
 			return false, nil
 		}
-		if err := on.SetReadDeadline(end); err != nil {
-			return false, err
-		}
-		n, _, err := on.ReadFrom(buf)
+		n, _, err := readUntil(ctx, on, buf, end)
 		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil && time.Now().Before(end) {
+				return false, ctxErr
+			}
 			// Deadline expired or fatal error — treat as timeout, no hairpin.
 			return false, nil
 		}

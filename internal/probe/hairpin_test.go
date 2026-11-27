@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -187,39 +189,165 @@ func TestProbeHairpinning_FalseNegative_PortRestrictedFiltering(t *testing.T) {
 	}
 }
 
-// TestProbeHairpinning_CtxCancelUnblocksRecv verifies that ctx.Done() forces
-// in-flight socket reads/writes to error immediately, mirroring the pattern
-// in stun.go. Without the deadline-bridge goroutine inside probeHairpinning
-// a cancel-without-deadline context would let the recv loop run until the
-// timeout fully elapsed.
-func TestProbeHairpinning_CtxCancelUnblocksRecv(t *testing.T) {
+// TestProbeHairpinning_ContextCutIsUntested: a cancelled ctx ends the probe
+// within 500ms of the cancel with no verdict and ctx's error, whether it was
+// cancelled before the STUN phase or during the listen. The tag is never sent,
+// so only ctx can end the 5s listen early.
+func TestProbeHairpinning_ContextCutIsUntested(t *testing.T) {
+	t.Parallel()
+	const window = 5 * time.Second
+	const cutAfter = 300 * time.Millisecond
+	dropTag := func(context.Context, net.PacketConn, netip.AddrPort, []byte) error { return nil }
+	cases := []struct {
+		name string
+		ctx  func() (context.Context, context.CancelFunc)
+		send hairpinSender
+		want error
+	}{
+		{"cancelled before the probe", func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx, cancel
+		}, realHairpinSend, context.Canceled},
+		{"cancelled during the listen", func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(context.Background())
+			time.AfterFunc(cutAfter, cancel)
+			return ctx, cancel
+		}, dropTag, context.Canceled},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newFakeStunEcho(t)
+			start := time.Now()
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			res := probeHairpinning(ctx, f.server(), window, tc.send, realHairpinRecv)
+			if elapsed := time.Since(start); elapsed > cutAfter+500*time.Millisecond {
+				t.Errorf("returned after %v, want within 500ms of the cut", elapsed)
+			}
+			if res.Detected != nil {
+				t.Errorf("Detected = %v, want nil", *res.Detected)
+			}
+			if !errors.Is(res.Err, tc.want) {
+				t.Errorf("Err = %v, want %v", res.Err, tc.want)
+			}
+		})
+	}
+}
+
+// TestProbeHairpinning_SizesToTimeLeft: 300ms of a 900ms deadline is gone
+// before the probe starts, as slow DNS would spend it. An 800ms budget would
+// run past the deadline; sized to two thirds of the 600ms left, the listen
+// finishes and reads false, not untested.
+func TestProbeHairpinning_SizesToTimeLeft(t *testing.T) {
 	t.Parallel()
 	f := newFakeStunEcho(t)
-	h := defaultHarness()
-	// Force the recv path to actually wait — production realHairpinRecv
-	// honors the deadline, so its blocking read is what cancel must unblock.
-	// Use a deliberately long timeout so the test fails (hangs past test
-	// timeout) if cancellation isn't bridged.
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	res := probeHairpinning(ctx, f.server(), 5*time.Second, h.send, h.recv)
-	elapsed := time.Since(start)
-
-	// Without the ctx.Done() bridge the call would block ~5s; with it,
-	// the cancel at 50ms should unblock within a few hundred ms.
-	if elapsed > 2*time.Second {
-		t.Errorf("ProbeHairpinning blocked for %v after ctx cancel; expected <2s", elapsed)
+	dropTag := func(context.Context, net.PacketConn, netip.AddrPort, []byte) error { return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 900*time.Millisecond)
+	defer cancel()
+	time.Sleep(300 * time.Millisecond)
+	res := probeHairpinning(ctx, f.server(), 800*time.Millisecond, dropTag, realHairpinRecv)
+	if res.Err != nil || res.Detected == nil || *res.Detected {
+		t.Fatalf("Detected = %v, Err = %v; want false, nil", res.Detected, res.Err)
 	}
-	// Result shape is allowed to vary (the cancel may interrupt different
-	// phases on different runs); the test asserts only that the call
-	// returned promptly.
-	_ = res
+}
+
+// TestRealHairpinRecv_DeadlineCutIsUntested: a ctx deadline before the window's
+// end returns ctx's error, not false, within 500ms of the deadline.
+func TestRealHairpinRecv_DeadlineCutIsUntested(t *testing.T) {
+	t.Parallel()
+	c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	const cut = 100 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), cut)
+	defer cancel()
+	start := time.Now()
+	got, err := realHairpinRecv(ctx, c, []byte("tag"), 5*time.Second)
+	if elapsed := time.Since(start); elapsed > cut+500*time.Millisecond {
+		t.Errorf("returned after %v, want within 500ms of the deadline", elapsed)
+	}
+	if got || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("got %v, %v; want false, %v", got, err, context.DeadlineExceeded)
+	}
+}
+
+// TestHairpinAddrs_NoTimeLeftBindsNothing: a deadline already gone returns
+// DeadlineExceeded before any socket is bound.
+func TestHairpinAddrs_NoTimeLeftBindsNothing(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	listen := func(string, string) (net.PacketConn, error) {
+		t.Error("listen called with no time left")
+		return nil, errors.New("unexpected listen")
+	}
+	ips := []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+	res := hairpinAddrs(ctx, Server{Host: "h", Port: 3478}, ips, 100*time.Millisecond, listen, realHairpinSend, realHairpinRecv)
+	if res.Detected != nil || !errors.Is(res.Err, context.DeadlineExceeded) {
+		t.Fatalf("Detected = %v, Err = %v; want nil, %v", res.Detected, res.Err, context.DeadlineExceeded)
+	}
+}
+
+// lateConn wakes its read 60ms after the first read deadline, as a loaded
+// scheduler can, and ignores later deadlines.
+type lateConn struct {
+	net.PacketConn
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+func (c *lateConn) SetReadDeadline(t time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.deadline.IsZero() {
+		c.deadline = t
+	}
+	return nil
+}
+
+func (c *lateConn) ReadFrom([]byte) (int, net.Addr, error) {
+	c.mu.Lock()
+	wake := c.deadline.Add(60 * time.Millisecond)
+	c.mu.Unlock()
+	time.Sleep(time.Until(wake))
+	return 0, nil, os.ErrDeadlineExceeded
+}
+
+// TestRealHairpinRecv_FullWindowReadsFalseAfterCtxEnds: the listen window runs
+// out before ctx does, but the read returns after both. The window passed, so
+// the answer is false, not ctx's error.
+func TestRealHairpinRecv_FullWindowReadsFalseAfterCtxEnds(t *testing.T) {
+	t.Parallel()
+	const window = 50 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), window+30*time.Millisecond)
+	defer cancel()
+	got, err := realHairpinRecv(ctx, &lateConn{}, []byte("tag"), window)
+	if got || err != nil {
+		t.Fatalf("got %v, %v; want false, nil", got, err)
+	}
+}
+
+// TestSendBindingAndWait_FullWindowIsNoResponseAfterCtxEnds: as for the
+// hairpin listen, a window that ran out before the read returned reads as no
+// response, not ctx's error.
+func TestSendBindingAndWait_FullWindowIsNoResponseAfterCtxEnds(t *testing.T) {
+	t.Parallel()
+	c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	const window = 50 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), window+30*time.Millisecond)
+	defer cancel()
+	_, err = sendBindingAndWait(ctx, &lateConn{PacketConn: c}, c.LocalAddr(), window, nil)
+	if !errors.Is(err, errNoResponse) {
+		t.Fatalf("err = %v, want errNoResponse", err)
+	}
 }
 
 // TestProbeHairpinning_InvalidServer covers the input-validation path:
@@ -329,34 +457,54 @@ func TestHairpinAddrs_EveryAddressFails(t *testing.T) {
 	}
 }
 
-// TestHairpinAddrs_CancelStopsFallthrough: after a cancel, a failed address is
-// not followed by the next one, whatever made it fail.
+// cancelOnWrite fails its send as noRouteConn does, cancelling first.
+type cancelOnWrite struct {
+	noRouteConn
+	cancel context.CancelFunc
+}
+
+func (c cancelOnWrite) WriteTo(b []byte, addr net.Addr) (int, error) {
+	c.cancel()
+	return c.noRouteConn.WriteTo(b, addr)
+}
+
+// TestHairpinAddrs_CancelStopsFallthrough: a cancel during the first address's
+// attempt stops the next one, whatever made the first fail.
 func TestHairpinAddrs_CancelStopsFallthrough(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name     string
-		udp6     func() (net.PacketConn, error)
+		udp6     func(n int, cancel context.CancelFunc) (net.PacketConn, error)
 		sendFail bool
 	}{
-		{"bind_fails", func() (net.PacketConn, error) { return nil, errors.New("no IPv6 here") }, false},
-		{"send_fails", func() (net.PacketConn, error) {
+		{"bind_fails", func(_ int, cancel context.CancelFunc) (net.PacketConn, error) {
+			cancel()
+			return nil, errors.New("no IPv6 here")
+		}, false},
+		// Only socket A cancels, so B's probe cannot end A's before A sends.
+		{"send_fails", func(n int, cancel context.CancelFunc) (net.PacketConn, error) {
 			c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if n == 0 {
+				return cancelOnWrite{noRouteConn{c}, cancel}, err
+			}
 			return noRouteConn{c}, err
 		}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			var boundV4 bool
+			var n int
 			listen := func(network, _ string) (net.PacketConn, error) {
 				if network == "udp4" {
 					boundV4 = true
 					return nil, errors.New("udp4 must not be bound")
 				}
-				return tc.udp6()
+				n++
+				return tc.udp6(n-1, cancel)
 			}
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
 			ips := []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("127.0.0.1")}
 			res := hairpinAddrs(ctx, Server{Host: "h", Port: 3478}, ips, 100*time.Millisecond, listen, realHairpinSend, realHairpinRecv)
 			if boundV4 {

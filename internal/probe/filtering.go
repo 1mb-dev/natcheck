@@ -1,10 +1,12 @@
 package probe
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"time"
 
 	"github.com/1mb-dev/natcheck/internal/stunserver"
@@ -50,8 +52,11 @@ var errSendFailed = errors.New("write")
 // not advertise OTHER-ADDRESS, or an address with no route. Uses one unconnected
 // UDP socket for all three tests so (a) the NAT mapping stays stable across
 // tests and (b) the socket can receive responses from the server's alt-IP/
-// alt-port sources (a connected UDP socket would filter those out). Tests 2/3
-// are one-shot; "no response within timeout/2" is the verdict, not an error.
+// alt-port sources (a connected UDP socket would filter those out). Each test
+// gets timeout/2, resent as sendBindingAndWait schedules; silence for the whole
+// window is the Test 2/3 verdict, not an error. No ctx: cli runs filtering
+// after the mapping probes and outside their --timeout context, so timeout is
+// its only bound.
 func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
 	res := FilteringResult{Server: server}
 	if !target.IsValid() || target.Port() == 0 {
@@ -76,7 +81,7 @@ func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration)
 	}
 
 	// Test 1: plain Binding.
-	t1, err := sendBindingAndWait(conn, remote, perTest, nil)
+	t1, err := sendBindingAndWait(context.Background(), conn, remote, perTest, nil)
 	if err != nil {
 		res.Err = fmt.Errorf("%w: %w", ErrTest1Failed, err)
 		return res
@@ -90,10 +95,10 @@ func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration)
 	}
 
 	// Test 2: CHANGE-IP|CHANGE-PORT.
-	t2, err2 := sendBindingAndWait(conn, remote, perTest, &changeRequestPayload{ip: true, port: true})
+	t2, err2 := sendBindingAndWait(context.Background(), conn, remote, perTest, &changeRequestPayload{ip: true, port: true})
 
 	// Test 3: CHANGE-PORT.
-	t3, err3 := sendBindingAndWait(conn, remote, perTest, &changeRequestPayload{ip: false, port: true})
+	t3, err3 := sendBindingAndWait(context.Background(), conn, remote, perTest, &changeRequestPayload{ip: false, port: true})
 
 	// Only silence is a filtering result. Any other failure means a reply got
 	// through and the test measured nothing.
@@ -139,15 +144,21 @@ type changeRequestPayload struct {
 }
 
 // sendBindingAndWait sends one BindingRequest (with optional CHANGE-REQUEST)
-// to remote and waits up to deadline for a matching response. The conn is an
+// to remote and waits up to wait for a matching response, resending the same
+// request on the retransmitGaps schedule while the next send falls inside the
+// window (TestProbeFiltering_ResendsLostChangeRequests). The conn is an
 // unconnected PacketConn so responses can arrive from sources other than
-// remote (RFC 5780 §4.4: server replies from alt-IP/alt-port). Returns
-// errNoResponse if the deadline expires with no matching reply. Discards
-// stale packets with non-matching transaction IDs (e.g., late responses from
-// a prior test) and keeps reading until either a matching response, deadline
-// expiry, or fatal socket error. The result records the reply's source; judging
-// it is the caller's job.
-func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Duration, change *changeRequestPayload) (*bindingResult, error) {
+// remote (RFC 5780 §4.4: server replies from alt-IP/alt-port). Returns ctx's
+// error if ctx is done before a reply or the window's end, and errNoResponse
+// once the window ends with no matching reply, ctx done or not
+// (TestSendBindingAndWait_FullWindowIsNoResponseAfterCtxEnds). Discards stale
+// packets with non-matching transaction IDs (e.g., late responses from a prior
+// test) and keeps reading. The result records the reply's source; judging it
+// is the caller's job.
+func sendBindingAndWait(ctx context.Context, conn net.PacketConn, remote net.Addr, wait time.Duration, change *changeRequestPayload) (*bindingResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	setters := []stun.Setter{stun.TransactionID, stun.BindingRequest}
 	if change != nil {
 		setters = append(setters, stunserver.BuildChangeRequest(change.ip, change.port))
@@ -158,7 +169,8 @@ func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Dura
 	}
 	req.Encode()
 
-	end := time.Now().Add(deadline)
+	sent := time.Now()
+	end := sent.Add(wait)
 	if err := conn.SetWriteDeadline(end); err != nil {
 		return nil, fmt.Errorf("set write deadline: %w", err)
 	}
@@ -166,18 +178,27 @@ func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Dura
 		return nil, fmt.Errorf("%w: %w", errSendFailed, err)
 	}
 
+	gaps := retransmitGaps
 	buf := make([]byte, 1500)
 	for {
-		if time.Until(end) <= 0 {
+		if !time.Now().Before(end) {
 			return nil, errNoResponse
 		}
-		if err := conn.SetReadDeadline(end); err != nil {
-			return nil, fmt.Errorf("set read deadline: %w", err)
+		readEnd := end
+		if len(gaps) > 0 && sent.Add(gaps[0]).Before(end) {
+			readEnd = sent.Add(gaps[0])
 		}
-		n, from, err := conn.ReadFrom(buf)
+		n, from, err := readUntil(ctx, conn, buf, readEnd)
 		if err != nil {
-			// Deadline reached or fatal error.
-			return nil, errNoResponse
+			if ctxErr := ctx.Err(); ctxErr != nil && time.Now().Before(end) {
+				return nil, ctxErr
+			}
+			if readEnd.Equal(end) || !errors.Is(err, os.ErrDeadlineExceeded) {
+				return nil, errNoResponse
+			}
+			_, _ = conn.WriteTo(req.Raw, remote)
+			sent, gaps = readEnd, gaps[1:]
+			continue
 		}
 		resp := &stun.Message{Raw: append([]byte{}, buf[:n]...)}
 		if err := resp.Decode(); err != nil {
@@ -197,4 +218,16 @@ func sendBindingAndWait(conn net.PacketConn, remote net.Addr, deadline time.Dura
 		}
 		return out, nil
 	}
+}
+
+// readUntil reads one packet before deadline, or fails once ctx is done. The
+// ctx hook is armed after the deadline is set, so setting the deadline cannot
+// overwrite a cancel.
+func readUntil(ctx context.Context, conn net.PacketConn, buf []byte, deadline time.Time) (int, net.Addr, error) {
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		return 0, nil, err
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Unix(1, 0)) })
+	defer stop()
+	return conn.ReadFrom(buf)
 }

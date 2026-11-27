@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Fixed
+
+- Hairpinning reads `null` with `hairpin_untested`, not `false`, when `--timeout` ends before its listen does; the listen is capped at two thirds of the time `--timeout` leaves after DNS (#48).
+- Filtering tests resend the same request at 500ms when `--timeout` is above 1s; at the default, a lost packet still reads as filtering when the resend's reply takes more than 250ms (#43).
+
 ## [0.1.6] — 2026-11-26
 
 ### Fixed
