@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"time"
 )
 
@@ -81,8 +82,9 @@ func probeHairpinning(ctx context.Context, server Server, timeout time.Duration,
 	return hairpinAddrs(ctx, server, ips, timeout, net.ListenPacket, send, recv)
 }
 
-// hairpinAddrs uses the first address whose sockets bind and send, as
-// probeAddrs does for the mapping probe. Silence does not fall through: it has
+// hairpinAddrs uses the first address whose sockets bind and send, IPv4 before
+// IPv6: the verdict follows IPv4, and native IPv6 has no NAT to hairpin
+// (TestHairpinAddrs_TriesIPv4First). Silence does not fall through: it has
 // already spent the probe's wait. Nothing falls through once ctx is done.
 func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout time.Duration,
 	listen func(network, address string) (net.PacketConn, error), send hairpinSender, recv hairpinReceiver) HairpinningResult {
@@ -102,6 +104,17 @@ func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout 
 		perProbe = 500 * time.Millisecond
 	}
 
+	ips = slices.Clone(ips)
+	slices.SortStableFunc(ips, func(a, b netip.Addr) int {
+		switch a4, b4 := a.Unmap().Is4(), b.Unmap().Is4(); {
+		case a4 == b4:
+			return 0
+		case a4:
+			return -1
+		default:
+			return 1
+		}
+	})
 	var pair *hairpinPair
 	var target netip.Addr
 	var mappedB netip.AddrPort

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -442,11 +443,12 @@ func (noRouteConn) WriteTo([]byte, net.Addr) (int, error) {
 func TestHairpinAddrs_FirstAddressFails(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name string
-		udp6 func() (net.PacketConn, error)
+		name  string
+		calls int // listen calls the first address makes before it fails
+		first func() (net.PacketConn, error)
 	}{
-		{"bind_fails", func() (net.PacketConn, error) { return nil, errors.New("no IPv6 here") }},
-		{"send_fails", func() (net.PacketConn, error) {
+		{"bind_fails", 1, func() (net.PacketConn, error) { return nil, errors.New("bind refused") }},
+		{"send_fails", 2, func() (net.PacketConn, error) {
 			c, err := net.ListenPacket("udp4", "127.0.0.1:0")
 			return noRouteConn{c}, err
 		}},
@@ -455,23 +457,38 @@ func TestHairpinAddrs_FirstAddressFails(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := newFakeStunEcho(t)
+			var n int
 			listen := func(network, address string) (net.PacketConn, error) {
-				if network == "udp6" {
-					return tc.udp6()
+				if n++; n <= tc.calls {
+					return tc.first()
 				}
 				return net.ListenPacket(network, address)
 			}
-			ips := []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("127.0.0.1")}
+			ips := []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("127.0.0.1")}
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			res := hairpinAddrs(ctx, f.server(), ips, 500*time.Millisecond, listen, realHairpinSend, realHairpinRecv)
 			if res.Err != nil {
-				t.Fatalf("expected fallback to IPv4, got: %v", res.Err)
+				t.Fatalf("expected fallback to the next address, got: %v", res.Err)
 			}
 			if res.Detected == nil || !*res.Detected {
-				t.Errorf("Detected = %v; want &true over IPv4", res.Detected)
+				t.Errorf("Detected = %v; want &true over the next address", res.Detected)
 			}
 		})
+	}
+}
+
+func TestHairpinAddrs_TriesIPv4First(t *testing.T) {
+	t.Parallel()
+	var networks []string
+	listen := func(network, _ string) (net.PacketConn, error) {
+		networks = append(networks, network)
+		return nil, errors.New("no sockets")
+	}
+	ips := []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("127.0.0.1")}
+	_ = hairpinAddrs(context.Background(), Server{Host: "h", Port: 3478}, ips, 100*time.Millisecond, listen, realHairpinSend, realHairpinRecv)
+	if want := []string{"udp4", "udp6"}; !slices.Equal(networks, want) {
+		t.Errorf("listened on %v, want %v", networks, want)
 	}
 }
 
@@ -507,12 +524,12 @@ func TestHairpinAddrs_CancelStopsFallthrough(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name     string
-		udp6     func(n int, cancel context.CancelFunc) (net.PacketConn, error)
+		first    func(n int, cancel context.CancelFunc) (net.PacketConn, error)
 		sendFail bool
 	}{
 		{"bind_fails", func(_ int, cancel context.CancelFunc) (net.PacketConn, error) {
 			cancel()
-			return nil, errors.New("no IPv6 here")
+			return nil, errors.New("bind refused")
 		}, false},
 		// Only socket A cancels, so B's probe cannot end A's before A sends.
 		{"send_fails", func(n int, cancel context.CancelFunc) (net.PacketConn, error) {
@@ -528,19 +545,19 @@ func TestHairpinAddrs_CancelStopsFallthrough(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			var boundV4 bool
+			var boundNext bool
 			var n int
 			listen := func(network, _ string) (net.PacketConn, error) {
-				if network == "udp4" {
-					boundV4 = true
-					return nil, errors.New("udp4 must not be bound")
+				if network == "udp6" {
+					boundNext = true
+					return nil, errors.New("udp6 must not be bound")
 				}
 				n++
-				return tc.udp6(n-1, cancel)
+				return tc.first(n-1, cancel)
 			}
-			ips := []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("127.0.0.1")}
+			ips := []netip.Addr{netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("192.0.2.1")}
 			res := hairpinAddrs(ctx, Server{Host: "h", Port: 3478}, ips, 100*time.Millisecond, listen, realHairpinSend, realHairpinRecv)
-			if boundV4 {
+			if boundNext {
 				t.Fatal("fell through to the next address after cancel")
 			}
 			if !errors.Is(res.Err, context.Canceled) {
