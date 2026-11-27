@@ -50,8 +50,8 @@ CGNAT behaviour varies by carrier. Some run permissive EIM CGNATs that hole-punc
 
 ## STUN, TURN, or neither
 
-- **STUN alone** works when both peers are behind EIM or ADM with reasonable filtering. Google and Cloudflare run public STUN servers for free.
-- **TURN** is required when at least one peer is APDM or on a hostile CGNAT. TURN relays the full session, so it costs bandwidth. Don't use public TURN in production — run your own ([coturn](https://github.com/coturn/coturn) is the standard).
+- **STUN alone** works when at least one peer is behind EIM and the other behind EIM or ADM, with reasonable filtering. Google and Cloudflare run public STUN servers for free.
+- **TURN** is required when both peers are behind ADM or APDM, or one is on a hostile CGNAT; EIM × APDM often needs it too. TURN relays the full session, so it costs bandwidth. Don't use public TURN in production — run your own ([coturn](https://github.com/coturn/coturn) is the standard).
 - **Neither** when at least one peer has a routable public IP (datacenter, open IPv6). Increasingly common; not yet default for residential users.
 
 "What fraction of my users need TURN" is a question about your user base, not your code.
@@ -84,8 +84,8 @@ Public endpoint: 203.0.113.45:51820
 Hairpinning: false
 
 Probes:
-  stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
-  stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
+  stun.l.google.com:19302 (192.0.2.10)   rtt=24ms  mapped=203.0.113.45:51820
+  stun.cloudflare.com:3478 (192.0.2.20)  rtt=31ms  mapped=203.0.113.45:51820
 
 Filtering not tested.
 ```

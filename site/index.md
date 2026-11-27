@@ -12,8 +12,8 @@ Public endpoint: 203.0.113.45:51820
 Hairpinning: false
 
 Probes:
-  stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
-  stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
+  stun.l.google.com:19302 (192.0.2.10)   rtt=24ms  mapped=203.0.113.45:51820
+  stun.cloudflare.com:3478 (192.0.2.20)  rtt=31ms  mapped=203.0.113.45:51820
 
 Filtering not tested.
 ```
@@ -39,8 +39,8 @@ go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
 | Code | Meaning |
 |------|---------|
 | `0`  | P2P-friendly (`likely` or `possible`) |
-| `1`  | P2P-hostile (`unlikely` or `unknown`, with at least one mapped endpoint returned) |
-| `2`  | probe or flag error |
+| `1`  | P2P-hostile (`unlikely` or `unknown`, unless code 2 applies) |
+| `2`  | probe or flag error, including when no probe mapped to IPv4 though IPv4 requests left the host ([details](https://github.com/1mb-dev/natcheck/blob/main/docs/design.md#address-families)) |
 
 Scripts that ask "did the tool run?" check `$? -ne 2`, and read `webrtc_forecast` only then. Scripts that ask "can I use direct P2P?" check `$? -eq 0`.
 
