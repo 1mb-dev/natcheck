@@ -4,14 +4,26 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Read this first
+
+- A hostname `--server` is probed in each address family it resolves to, and the verdict follows IPv4 ([`docs/design.md` § Address families](docs/design.md#address-families)). On a dual-stack host whose IPv4 NAT is symmetric, a run that read `possible` and exited 0 now reads `unlikely` and exits 1; a run where IPv4 requests left and no probe mapped to IPv4 now reads `Blocked` and exits 2. The IPv6 verdict is under `address_families.ipv6` (#42).
+- Warning `mixed_address_family_probes` is retired; `address_families_disagree` fires when the families' forecasts differ (#42).
+- `probes[]` has one entry per server per address family, and `public_endpoint` is IPv4's when IPv4 answered (#42).
+
 ### Added
 
-- Warning `no_nat` when every successful probe maps to this host's own address and the port it left from; the NAT type and forecast are unchanged (#39).
+- JSON `address_families` object with each family's verdict, forecast, filtering and warnings, and `target` on each probe (#42).
+- Warning `no_nat` when every successful probe of an address family maps to this host's own address and the port it left from; the NAT type and forecast are unchanged (#39).
 - RFC 5780 §4.3 Tests II and III, run after the filtering tests when `OTHER-ADDRESS` passes the checks in [`docs/design.md` § Mapping tests](docs/design.md#mapping-tests-rfc-5780-43) (#41).
 
 ### Changed
 
-- An ADM verdict reads `APDM` when Tests II and III map differently, and drops `adm_or_stricter` either way, if both replied, Test II mapped differently from Test 1, and the other address family's successful probes, if any, classify Unknown (#41).
+- Filtering and Tests II and III run in each address family whose probes found a server advertising `OTHER-ADDRESS` (#42).
+- An ADM verdict reads `APDM` when Tests II and III map differently, and drops `adm_or_stricter` either way, if both replied and Test II mapped differently from Test 1 (#41).
+- An address family that sends and gets no reply holds the run to `--timeout` ([`docs/design.md` § Concurrency model](docs/design.md#concurrency-model)) (#42).
+- Hairpinning tries the first `--server`'s IPv4 address first, so on a dual-stack host it covers IPv4 instead of IPv6 (#42).
+- `ipv4_untested` reads "No IPv4 probe succeeded; this verdict covers IPv6 only." (#42).
+- `insufficient_server_diversity` text covers either address family (#42).
 - `cgnat_detected` text says the server sits inside a carrier or overlay network and the NAT beyond it is not measured; forecast and exit code are unchanged (#53).
 
 ### Fixed
