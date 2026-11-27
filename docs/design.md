@@ -386,7 +386,7 @@ Verbose output emits coded warning constants in `warnings[]`:
 | Constant | Condition |
 |---|---|
 | `WarnFilteringSkippedNoChangeRequest` | Server didn't advertise `OTHER-ADDRESS` |
-| `WarnHairpinUntested` | Local socket setup, STUN probe or listen read failed, or `--timeout` ran out; hairpinning not measured |
+| `WarnHairpinUntested` | Hairpinning not measured; see Hairpinning detection |
 
 No free-text warning strings.
 
@@ -416,7 +416,7 @@ If the server doesn't advertise `OTHER-ADDRESS`, all filtering tests skip; `Warn
 
 After Tests 2 and 3, on the same socket, natcheck sends Test II to `OTHER-ADDRESS`'s IP with the target's port and Test III to `OTHER-ADDRESS`. They run last because a request to `OTHER-ADDRESS`'s IP opens an address-dependent filter for Test 2's reply (`TestProbeFiltering_MappingTests`). They also run when the server ignored `CHANGE-REQUEST`, and not after a local fault; Test III is not sent when Test II gets no reply (`TestProbeFiltering_MappingTestsAfterIgnoredChangeRequest`, `TestProbeFiltering_LocalFaultIsNotFiltering`). Each gets the same window as a filtering test, so with Test 1 the sequence waits on at most five windows: 3.75s at the 1.5s filtering budget, stated in `--timeout`'s help (`TestProbeFiltering_MappingTests`, `TestSendBindingAndWait_SilenceEndsAtWindow`, `TestRun_Help`).
 
-Apart from the hairpin tag, sent to the mapped endpoint a server reports, these are the only packets sent to an address a server chose. They are skipped unless `OTHER-ADDRESS` has the target's address family and scope (loopback, link-local, private, public, or the same special-purpose range, such as `100.64.0.0/10`), is not in a prefix that embeds an IPv4 address (NAT64, Teredo, 6to4), is in `2000::/3` when it is a public IPv6 address, and has a port other than the target's; on the target's port both tests would reach one endpoint (`TestMappingTestAllowed`).
+These and the hairpin tag are the only packets sent to an address a server chose. Each is skipped unless that address has the family and scope of the server address it came from (loopback, link-local, private, public, or the same block of the IANA IPv4 and IPv6 Special-Purpose Address Registries, such as `100.64.0.0/10`), is not in a block natcheck never sends to (unspecified, limited broadcast, discard-only, IPv6 dummy, SRv6, and the NAT64, Teredo and 6to4 prefixes that embed an IPv4 address), and is in `2000::/3` when it is a public IPv6 address (`TestMappingTestAllowed`, `TestMappingTestAllowed_SpecialRanges`, `TestSpecialRanges_MatchIANARegistry`, `TestHairpinAddrs_MappedOutsideScopeSendsNothing`). Tests II and III also need a port other than the target's; on the target's port both tests would reach one endpoint (`TestMappingTestAllowed`). They are also skipped when `OTHER-ADDRESS` is inside a prefix of this host's interfaces (an IPv6 prefix longer than /64 widened to /64), or when the interface lookup fails (`TestProbeFiltering_MappingTestsSkipHostLink`).
 
 When both get a reply, Test II's mapping differs from Test 1's and the verdict is ADM, different Test II and III mappings make it APDM and equal ones leave ADM; either way `adm_or_stricter` is dropped. The tests never produce EIM and never replace Unknown, so one RFC 5780 server cannot stand in for two. Verdicts combine address families, so they refine one only when the other family's probes alone classify Unknown (`TestClassify_MappingTest`).
 
@@ -434,6 +434,7 @@ Result:
 - Tagged packet arrives → `hairpinning: true`
 - Timeout → `hairpinning: false`
 - A or B's STUN probe failed, a listen read failed for a reason other than its deadline, or `--timeout` ended before the listen did → `hairpinning: null` + `WarnHairpinUntested` (`TestRealHairpinRecv_ReadErrorIsNotFalse`, `TestRealHairpinRecv_DeadlineCutIsUntested`, `TestProbeHairpinning_ContextCutIsUntested`)
+- `mB` fails the family, scope and never-block checks in Mapping tests above → no tag is sent; `hairpinning: null` + `WarnHairpinUntested` (`TestHairpinAddrs_MappedOutsideScopeSendsNothing`)
 
 Documented limitation: false-negative possible if the NAT applies port-restricted filtering on the hairpin path. Test case in `internal/probe/hairpin_test.go` simulates this scenario via the existing fake-responder pattern.
 

@@ -80,23 +80,23 @@ func FilteringMaxDuration(timeout time.Duration) time.Duration {
 }
 
 // ProbeFiltering runs RFC 5780 §4.4 against target, the address the mapping
-// probe of server reached, then §4.3 Tests II and III when OTHER-ADDRESS allows
-// them (mappingTestAllowed). Resolving the host again could reach a host that did
-// not advertise OTHER-ADDRESS, or an address with no route. Uses one unconnected
-// UDP socket for every test so (a) the NAT mapping stays stable across
-// tests and (b) the socket can receive responses from the server's alt-IP/
-// alt-port sources (a connected UDP socket would filter those out). Each test
-// gets timeout/2, resent as sendBindingAndWait schedules; silence for the whole
-// window is the Test 2/3 verdict, not an error. Tests II and III run last:
-// sending to OTHER-ADDRESS's IP opens an address-dependent filter for Test 2's
-// reply (TestProbeFiltering_MappingTests). No ctx: cli runs filtering
-// after the mapping probes and outside their --timeout context, so timeout is
-// its only bound.
+// probe of server reached, then §4.3 Tests II and III when OTHER-ADDRESS passes
+// the checks in docs/design.md § Mapping tests. Resolving the host again could
+// reach a host that did not advertise OTHER-ADDRESS, or an address with no
+// route. Uses one unconnected UDP socket for every test so (a) the NAT mapping
+// stays stable across tests and (b) the socket can receive responses from the
+// server's alt-IP/alt-port sources (a connected UDP socket would filter those
+// out). Each test gets timeout/2, resent as sendBindingAndWait schedules;
+// silence for the whole window is the Test 2/3 verdict, not an error. Tests II
+// and III run last: sending to OTHER-ADDRESS's IP opens an address-dependent
+// filter for Test 2's reply (TestProbeFiltering_MappingTests). No ctx: cli runs
+// filtering after the mapping probes and outside their --timeout context, so
+// timeout is its only bound.
 func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
-	return probeFilteringWith(net.ListenPacket, server, target, timeout)
+	return probeFilteringWith(net.ListenPacket, net.InterfaceAddrs, server, target, timeout)
 }
 
-func probeFilteringWith(listen func(network, address string) (net.PacketConn, error), server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
+func probeFilteringWith(listen func(network, address string) (net.PacketConn, error), hostAddrs func() ([]net.Addr, error), server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
 	res := FilteringResult{Server: server}
 	if !target.IsValid() || target.Port() == 0 {
 		res.Err = fmt.Errorf("invalid target %v for %s:%d", target, server.Host, server.Port)
@@ -145,7 +145,7 @@ func probeFilteringWith(listen func(network, address string) (net.PacketConn, er
 		return res // a local fault: no later test can be trusted
 	}
 
-	if mappingTestAllowed(target, res.Test1Other) {
+	if mappingTestAllowed(target, res.Test1Other) && !reachesHostLink(res.Test1Other.Addr(), hostAddrs) {
 		res.AltIPMapped, res.AltEndpointMapped = mappingTests(conn, target, res.Test1Other, perTest)
 	}
 	return res
@@ -172,61 +172,181 @@ func judgeFiltering(target, other netip.AddrPort, t2 *bindingResult, err2 error,
 }
 
 // mappingTestAllowed reports whether Tests II and III can measure anything and
-// may be sent. Apart from the hairpin tag, sent to the mapped endpoint a server
-// reports, they are the only packets natcheck sends to an address a server
-// chose, so OTHER-ADDRESS must be in the target's family and address scope: a
-// public server cannot aim them at a private, loopback, link-local or
-// special-purpose host (TestMappingTestAllowed). On the target's port, Tests II
-// and III would reach one endpoint and always agree.
+// may be sent: OTHER-ADDRESS passes serverChosenAllowed with a nonzero port
+// other than the target's. On the target's port, Tests II and III would reach
+// one endpoint and always agree (TestMappingTestAllowed).
 func mappingTestAllowed(target, other netip.AddrPort) bool {
-	t, o := target.Addr().Unmap(), other.Addr().Unmap()
-	switch {
-	case !other.IsValid(), other.Port() == 0, other.Port() == target.Port():
-		return false
-	case o.Is4() != t.Is4(), o.IsMulticast(), o.IsUnspecified():
+	if !other.IsValid() || other.Port() == 0 || other.Port() == target.Port() {
 		return false
 	}
-	for _, p := range embedsIPv4Prefixes {
-		if p.Contains(o) {
-			return false
+	return serverChosenAllowed(target.Addr(), other.Addr())
+}
+
+// reachesHostLink reports whether other is inside a prefix of this host's
+// interfaces, or the interface lookup failed. Such an address passes
+// serverChosenAllowed yet reaches this host or a neighbour on its link; the
+// server's own reports cannot vouch for it
+// (TestProbeFiltering_MappingTestsSkipHostLink).
+func reachesHostLink(other netip.Addr, hostAddrs func() ([]net.Addr, error)) bool {
+	addrs, err := hostAddrs()
+	if err != nil {
+		return true
+	}
+	o := other.Unmap().WithZone("")
+	for _, a := range addrs {
+		if p, ok := hostPrefix(a); ok && p.Contains(o) {
+			return true
 		}
 	}
-	scope := addrScope(o)
-	if o.Is6() && scope == scopePublic && !globalUnicast6.Contains(o) {
+	return false
+}
+
+// hostPrefix returns an interface address's prefix. An IPv6 prefix longer than
+// /64 is widened to /64: a DHCPv6 address is listed as /128 on a /64 link. An
+// unreadable mask gives the address alone, so the guard still covers it
+// (TestProbeFiltering_MappingTestsSkipHostLink).
+func hostPrefix(a net.Addr) (netip.Prefix, bool) {
+	ipnet, ok := a.(*net.IPNet)
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	ip, ok := netip.AddrFromSlice(ipnet.IP)
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	ip = ip.Unmap()
+	ones, bits := ipnet.Mask.Size()
+	if ip.Is6() && ones > 64 {
+		ones = 64
+	}
+	if bits != ip.BitLen() {
+		ones = ip.BitLen()
+	}
+	p, err := ip.Prefix(ones)
+	return p, err == nil
+}
+
+// serverChosenAllowed reports whether natcheck may send to addr, an address the
+// server at target chose: OTHER-ADDRESS or the hairpin mapped endpoint. The
+// checks are those of docs/design.md § Mapping tests (TestMappingTestAllowed,
+// TestMappingTestAllowed_SpecialRanges,
+// TestHairpinAddrs_MappedOutsideScopeSendsNothing).
+func serverChosenAllowed(target, addr netip.Addr) bool {
+	t, a := target.Unmap(), addr.Unmap().WithZone("")
+	if !a.IsValid() || a.Is4() != t.Is4() || a.IsMulticast() {
+		return false
+	}
+	if specialRange(a, isNever) >= 0 {
+		return false
+	}
+	scope := addrScope(a)
+	if a.Is6() && scope == scopePublic && !globalUnicast6.Contains(a) {
 		return false
 	}
 	return scope == addrScope(t)
 }
 
-// globalUnicast6 is the only IPv6 space a public OTHER-ADDRESS may be in.
-// Outside it lie unassigned space, discard-only 100::/64, and the
-// IPv4-compatible ::/96 and SIIT ::ffff:0:0:0/96 forms, which Unmap does not
-// convert (TestMappingTestAllowed).
+// globalUnicast6 is the only IPv6 space a public server-chosen address may be
+// in. Outside it lie unassigned space and the IPv4-compatible ::/96 and SIIT
+// ::ffff:0:0:0/96 forms, which Unmap does not convert (TestMappingTestAllowed).
 var globalUnicast6 = netip.MustParsePrefix("2000::/3")
 
-// embedsIPv4Prefixes carry an IPv4 address that a gateway or this host's own
-// tunnel sends to (NAT64, Teredo, 6to4), so the prefix hides that address's
-// scope: a target in the same prefix does not make it safe.
-var embedsIPv4Prefixes = []netip.Prefix{
-	netip.MustParsePrefix("64:ff9b::/96"),
-	netip.MustParsePrefix("64:ff9b:1::/48"),
-	netip.MustParsePrefix("2001::/32"),
-	netip.MustParsePrefix("2002::/16"),
+// disposition is how serverChosenAllowed treats a specialRanges row
+// (TestMappingTestAllowed_SpecialRanges, TestSpecialRanges_MatchIANARegistry).
+type disposition uint8
+
+const (
+	std    disposition = iota // netip's loopback, link-local or private predicate gives the scope
+	own                       // the prefix is its own scope
+	never                     // never sent to
+	public                    // public on purpose
+)
+
+type specialRangeRow struct {
+	p netip.Prefix
+	d disposition
 }
 
-// specialPrefixes are special-purpose ranges that the checks in addrScope
-// would otherwise count as public. Each is its own scope.
-var specialPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("2001::/23"),
-	netip.MustParsePrefix("fec0::/10"),
+// specialRanges is every block of the IANA IPv4 and IPv6 Special-Purpose
+// Address Registries, as pinned in testdata, plus fec0::/10
+// (TestSpecialRanges_MatchIANARegistry). No address in a never row is sent to
+// (TestMappingTestAllowed_SpecialRanges).
+var specialRanges = []specialRangeRow{
+	{netip.MustParsePrefix("0.0.0.0/8"), own},
+	{netip.MustParsePrefix("0.0.0.0/32"), never},
+	{netip.MustParsePrefix("10.0.0.0/8"), std},
+	{netip.MustParsePrefix("100.64.0.0/10"), own},
+	{netip.MustParsePrefix("127.0.0.0/8"), std},
+	{netip.MustParsePrefix("169.254.0.0/16"), std},
+	{netip.MustParsePrefix("172.16.0.0/12"), std},
+	{netip.MustParsePrefix("192.0.0.0/24"), own},
+	{netip.MustParsePrefix("192.0.0.0/29"), own},
+	{netip.MustParsePrefix("192.0.0.8/32"), own},
+	{netip.MustParsePrefix("192.0.0.9/32"), own},
+	{netip.MustParsePrefix("192.0.0.10/32"), own},
+	{netip.MustParsePrefix("192.0.0.170/32"), own},
+	{netip.MustParsePrefix("192.0.0.171/32"), own},
+	{netip.MustParsePrefix("192.0.2.0/24"), public},
+	{netip.MustParsePrefix("192.31.196.0/24"), public},
+	{netip.MustParsePrefix("192.52.193.0/24"), public},
+	{netip.MustParsePrefix("192.88.99.0/24"), public},
+	{netip.MustParsePrefix("192.88.99.2/32"), own},
+	{netip.MustParsePrefix("192.168.0.0/16"), std},
+	{netip.MustParsePrefix("192.175.48.0/24"), public},
+	{netip.MustParsePrefix("198.18.0.0/15"), own},
+	{netip.MustParsePrefix("198.51.100.0/24"), public},
+	{netip.MustParsePrefix("203.0.113.0/24"), public},
+	{netip.MustParsePrefix("240.0.0.0/4"), own},
+	{netip.MustParsePrefix("255.255.255.255/32"), never},
+
+	{netip.MustParsePrefix("::1/128"), std},
+	{netip.MustParsePrefix("::/128"), never},
+	{netip.MustParsePrefix("::ffff:0:0/96"), never},
+	{netip.MustParsePrefix("64:ff9b::/96"), never},
+	{netip.MustParsePrefix("64:ff9b:1::/48"), never},
+	{netip.MustParsePrefix("100::/64"), never},
+	{netip.MustParsePrefix("100:0:0:1::/64"), never},
+	{netip.MustParsePrefix("2001::/23"), own},
+	{netip.MustParsePrefix("2001::/32"), never},
+	{netip.MustParsePrefix("2001:1::1/128"), own},
+	{netip.MustParsePrefix("2001:1::2/128"), own},
+	{netip.MustParsePrefix("2001:1::3/128"), own},
+	{netip.MustParsePrefix("2001:2::/48"), own},
+	{netip.MustParsePrefix("2001:3::/32"), own},
+	{netip.MustParsePrefix("2001:4:112::/48"), own},
+	{netip.MustParsePrefix("2001:10::/28"), own},
+	{netip.MustParsePrefix("2001:20::/28"), own},
+	{netip.MustParsePrefix("2001:30::/28"), own},
+	{netip.MustParsePrefix("2001:db8::/32"), public},
+	{netip.MustParsePrefix("2002::/16"), never},
+	{netip.MustParsePrefix("2620:4f:8000::/48"), public},
+	{netip.MustParsePrefix("3fff::/20"), public},
+	{netip.MustParsePrefix("5f00::/16"), never},
+	{netip.MustParsePrefix("fc00::/7"), std},
+	{netip.MustParsePrefix("fe80::/10"), std},
+	{netip.MustParsePrefix("fec0::/10"), own}, // off-registry: deprecated site-local, RFC 3879
 }
 
+// specialRange returns the index of the longest row of specialRanges that
+// contains a and passes keep, or -1.
+func specialRange(a netip.Addr, keep func(disposition) bool) int {
+	best := -1
+	for i, r := range specialRanges {
+		if keep(r.d) && r.p.Contains(a) && (best < 0 || r.p.Bits() > specialRanges[best].p.Bits()) {
+			best = i
+		}
+	}
+	return best
+}
+
+func isNever(d disposition) bool  { return d == never }
+func notNever(d disposition) bool { return d != never }
+
+// addrScope gives the scope serverChosenAllowed compares. A never row bars
+// sending, not a scope, so an address in one takes the scope of the row around
+// it, if any (TestMappingTestAllowed).
 func addrScope(a netip.Addr) int {
+	a = a.WithZone("")
 	switch {
 	case a.IsLoopback():
 		return 0
@@ -235,10 +355,8 @@ func addrScope(a netip.Addr) int {
 	case a.IsPrivate():
 		return 2
 	}
-	for i, p := range specialPrefixes {
-		if p.Contains(a) {
-			return 4 + i
-		}
+	if i := specialRange(a, notNever); i >= 0 && specialRanges[i].d == own {
+		return 4 + i
 	}
 	return scopePublic
 }

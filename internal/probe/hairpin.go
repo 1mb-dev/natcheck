@@ -17,9 +17,10 @@ import (
 //
 //   - nil: probe could not run end-to-end (socket allocation, DNS, or per-socket
 //     STUN probe failed, a listen read failed for a reason other than its
-//     deadline (TestRealHairpinRecv_ReadErrorIsNotFalse), or ctx ended before
-//     the listen window did); Err describes the underlying cause. Callers
-//     should emit WarnHairpinUntested at the classifier layer.
+//     deadline (TestRealHairpinRecv_ReadErrorIsNotFalse), the mapped endpoint
+//     failed serverChosenAllowed (TestHairpinAddrs_MappedOutsideScopeSendsNothing),
+//     or ctx ended before the listen window did); Err describes the underlying
+//     cause. Callers should emit WarnHairpinUntested at the classifier layer.
 //   - &true: tagged loopback packet arrived on socket B; the NAT supports
 //     hairpinning for the (A→mB) path.
 //   - &false: listen window elapsed with no tagged packet; either no hairpinning
@@ -102,6 +103,7 @@ func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout 
 	}
 
 	var pair *hairpinPair
+	var target netip.Addr
 	var mappedB netip.AddrPort
 	for i, ip := range ips {
 		if i > 0 && ctx.Err() != nil {
@@ -116,7 +118,7 @@ func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout 
 		}
 		mappedB, err = p.mappedB(ctx, net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, uint16(server.Port))), perProbe)
 		if err == nil {
-			pair = p
+			pair, target = p, ip
 			break
 		}
 		p.close()
@@ -130,6 +132,12 @@ func hairpinAddrs(ctx context.Context, server Server, ips []netip.Addr, timeout 
 	}
 	defer pair.close()
 	res.Err = nil
+
+	// The tag goes to an address the server chose (TestHairpinAddrs_MappedOutsideScopeSendsNothing).
+	if !serverChosenAllowed(target, mappedB.Addr()) {
+		res.Err = fmt.Errorf("mapped endpoint %v is an address natcheck does not send to", mappedB)
+		return res
+	}
 
 	tag := make([]byte, 16)
 	if _, err := rand.Read(tag); err != nil {
@@ -199,7 +207,7 @@ func (p *hairpinPair) mappedB(ctx context.Context, remote net.Addr, perProbe tim
 	if bRes.err != nil {
 		return netip.AddrPort{}, fmt.Errorf("STUN probe on socket B: %w", bRes.err)
 	}
-	if !bRes.mapped.IsValid() {
+	if !bRes.mapped.IsValid() || bRes.mapped.Port() == 0 {
 		return netip.AddrPort{}, errors.New("STUN probe on socket B returned invalid mapped endpoint")
 	}
 	return bRes.mapped, nil
