@@ -29,14 +29,19 @@ type Server struct {
 // from the target, even an error response or one without a mapped address; Err
 // may still be set. A packet that does not decode cannot be tied to the request
 // and leaves Replied false (TestProbe_RepliedWithoutMapping).
+//
+// Untranslated is true when Mapped is an address of this host's interfaces with
+// the port the probe left from: nothing on the path rewrote the request
+// (TestProbe_Untranslated).
 type Result struct {
-	Server  Server
-	Target  netip.AddrPort
-	Mapped  netip.AddrPort
-	Other   netip.AddrPort
-	RTT     time.Duration
-	Replied bool
-	Err     error
+	Server       Server
+	Target       netip.AddrPort
+	Mapped       netip.AddrPort
+	Other        netip.AddrPort
+	RTT          time.Duration
+	Replied      bool
+	Untranslated bool
+	Err          error
 }
 
 // Prober probes every server in one run and returns one Result per server, in

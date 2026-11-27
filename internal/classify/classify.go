@@ -29,14 +29,13 @@ const (
 	EndpointIndependentMapping
 
 	// AddressDependentMapping: mapped endpoint varies by destination address.
-	// RFC 5780. v0.1 reports this for any case where mapped endpoints differ
-	// across servers; ADM vs APDM cannot be distinguished without
-	// CHANGE-REQUEST.
+	// RFC 5780. Mapped endpoints that differ across servers read ADM with
+	// adm_or_stricter, unless applyMappingTest refines it.
 	AddressDependentMapping
 
 	// AddressPortDependentMapping: mapped endpoint varies by destination
-	// address and port. RFC 5780. Legacy term "symmetric". v0.1 does not
-	// emit this category directly (see AddressDependentMapping note).
+	// address and port. RFC 5780. Legacy term "symmetric". Only
+	// applyMappingTest assigns it.
 	AddressPortDependentMapping
 
 	// Blocked: no probe succeeded. Network rejects outbound STUN, all target
@@ -150,6 +149,7 @@ const (
 	WarnHairpinUntested                 = "hairpin_untested"
 	WarnInsufficientServerDiversity     = "insufficient_server_diversity"
 	WarnIPv4Untested                    = "ipv4_untested"
+	WarnNoNAT                           = "no_nat"
 )
 
 // cgnatPrefix is RFC 6598 shared address space.
@@ -176,6 +176,7 @@ var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 func Classify(results []probe.Result, filtering *probe.FilteringResult, hairpinning *probe.HairpinningResult) Verdict {
 	v := classifyMapping(results)
 	applyFiltering(&v, filtering)
+	applyMappingTest(&v, results, filtering)
 	applyHairpinning(&v, hairpinning)
 	v.Forecast = decideForecast(v)
 	return v
@@ -274,6 +275,10 @@ func classifyMapping(results []probe.Result) Verdict {
 			v.Warnings = appendUnique(v.Warnings, w)
 		}
 	}
+	// One probe is enough. The forecast stays the mapping's (TestClassify_NoNAT).
+	if !slices.ContainsFunc(successes, func(r probe.Result) bool { return !r.Untranslated }) {
+		v.Warnings = append(v.Warnings, WarnNoNAT)
+	}
 
 	return v
 }
@@ -326,9 +331,9 @@ func appendUnique(ws []string, w string) []string {
 }
 
 // classifyGroup runs the case-1/case-many mapping classification for a
-// non-empty set of successful probes. CGNAT detection is applied. Warnings
-// returned do NOT include WarnFilteringBehaviorNotTested — that's the
-// caller's concern at the combined-verdict level.
+// non-empty set of successful probes. CGNAT detection is applied.
+// Warnings returned do NOT include WarnFilteringBehaviorNotTested — that's
+// the caller's concern at the combined-verdict level.
 func classifyGroup(group []probe.Result) Verdict {
 	v := Verdict{}
 	switch len(group) {
@@ -413,9 +418,40 @@ func applyFiltering(v *Verdict, f *probe.FilteringResult) {
 	v.Warnings = removeWarning(v.Warnings, WarnFilteringBehaviorNotTested)
 }
 
+// applyMappingTest refines an ADM verdict with RFC 5780 §4.3 Tests II and III,
+// which differ only in destination port: different mappings make it APDM, equal
+// ones leave ADM; either way adm_or_stricter drops. As in RFC 5780, they apply
+// only when Test II's mapping differs from Test I's. They never produce EIM and
+// never replace Unknown (TestClassify_MappingTest). Verdicts combine families,
+// so they apply only when the other family's probes alone classify Unknown.
+func applyMappingTest(v *Verdict, results []probe.Result, f *probe.FilteringResult) {
+	if f == nil || !f.AltIPMapped.IsValid() || !f.AltEndpointMapped.IsValid() || f.AltIPMapped == f.Test1Mapped || v.Type != AddressDependentMapping {
+		return
+	}
+	is4 := f.Test1Mapped.Addr().Is4()
+	var tested, rest []probe.Result
+	for _, r := range results {
+		if r.Err != nil || !r.Mapped.IsValid() {
+			continue
+		}
+		if r.Mapped.Addr().Is4() == is4 {
+			tested = append(tested, r)
+		} else {
+			rest = append(rest, r)
+		}
+	}
+	if len(tested) == 0 || (len(rest) > 0 && classifyGroup(rest).Type != Unknown) {
+		return
+	}
+	if f.AltIPMapped != f.AltEndpointMapped {
+		v.Type = AddressPortDependentMapping
+	}
+	v.Warnings = removeWarning(v.Warnings, WarnADMOrStricter)
+}
+
 // decideForecast computes the WebRTC forecast from a fully-populated Verdict.
 // Precedence (top-down, first match wins):
-//  1. CGNAT detected → unknown (v0.1 honesty rule preserved)
+//  1. CGNAT detected → unknown
 //  2. Blocked → unknown when a target replied; else TURN required, and unknown
 //     when no request was sent, unlikely when one was
 //     (TestDecideForecast_Precedence)
@@ -459,8 +495,10 @@ func decideForecast(v Verdict) Forecast {
 	}
 }
 
-// applyCGNAT sets CGNAT=true and appends the warning when the observed public
-// IP falls in RFC 6598 100.64.0.0/10.
+// applyCGNAT sets CGNAT=true and appends the warning when the group's first
+// mapped address is in RFC 6598 100.64.0.0/10. Public servers never see that
+// range; behind a carrier NAT the probes cross it and the mapping verdict
+// covers it (TestRun_MappingBehaviorOverRealSockets).
 func applyCGNAT(v *Verdict) {
 	if !v.PublicEndpoint.IsValid() {
 		return

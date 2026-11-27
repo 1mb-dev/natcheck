@@ -48,7 +48,7 @@ In:
 - `--timeout duration` flag (default 5s)
 - `--version`, `--help`
 - WebRTC forecast: `likely | possible | unlikely | unknown`. `likely` needs measured endpoint-independent filtering; EIM otherwise reads `possible`
-- CGNAT heuristic warning (if mapped IP is in 100.64.0.0/10)
+- Warning `cgnat_detected` when an address family's first mapped address is in 100.64.0.0/10 (a server inside a carrier or overlay network)
 - Exit codes: 0 (P2P-friendly), 1 (P2P-hostile), 2 (probe error)
 
 Out of scope:
@@ -107,8 +107,8 @@ The JSON schema is a public contract from v0.1 onward; only additive changes aft
 
 - All probes fail → exit 2, report per-server errors. Forecast `unknown` with `turn_required: false` when a server replied to a request without a usable mapping (such as an error response, or a success with no mapped address); otherwise `turn_required: true`, with `unlikely` when a request left the host and `unknown` when none did (`TestClassify`)
 - A mapping probe that gets no reply but, before its deadline, a packet from the server's address that does not decode reads `undecodable reply from <address>`, not `no response`; that packet does not set `Replied` or change the forecast (`TestProbe_GarbledResponse`, `TestProbe_GarbledThenValidReplySucceeds`, `TestProbe_RepliedWithoutMapping`)
-- Mapped endpoints disagree across servers → NAT type "Address-Dependent Mapping" (or APDM if we can distinguish; v0.1 reports "ADM or stricter"), exit 1, forecast `unlikely`
-- Mapped IP in `100.64.0.0/10` → warning `cgnat_detected`, forecast `unknown`
+- Mapped endpoints disagree across servers → NAT type "Address-Dependent Mapping" with warning `adm_or_stricter`, or ADM or APDM without the warning when RFC 5780 Tests II and III refine it (see Mapping tests; `TestClassify_MappingTest`); exit 1, forecast `unlikely`
+- An address family's first mapped address in `100.64.0.0/10` (a server inside a carrier or overlay network) → warning `cgnat_detected`, forecast `unknown`
 
 ## Architecture
 
@@ -172,13 +172,14 @@ type Server struct {
 }
 
 type Result struct {
-    Server  Server
-    Target  netip.AddrPort // resolved address, zero if nothing was sent
-    Mapped  netip.AddrPort // zero if probe failed
-    Other   netip.AddrPort // OTHER-ADDRESS, zero if not advertised
-    RTT     time.Duration  // zero if probe failed
-    Replied bool           // a reply with this request's transaction ID arrived from the target, usable or not (TestProbe_RepliedWithoutMapping)
-    Err     error          // nil on success
+    Server       Server
+    Target       netip.AddrPort // resolved address, zero if nothing was sent
+    Mapped       netip.AddrPort // zero if probe failed
+    Other        netip.AddrPort // OTHER-ADDRESS, zero if not advertised
+    RTT          time.Duration  // zero if probe failed
+    Replied      bool           // a reply with this request's transaction ID arrived from the target, usable or not (TestProbe_RepliedWithoutMapping)
+    Untranslated bool           // Mapped is an interface address of this host with the probe's local port (TestProbe_Untranslated)
+    Err          error          // nil on success
 }
 
 type Prober interface {
@@ -196,8 +197,8 @@ type NATType int
 const (
     Unknown NATType = iota
     EndpointIndependentMapping  // RFC 5780, "cone"
-    AddressDependentMapping     // RFC 5780, "symmetric"; also means "not EIM"
-    AddressPortDependentMapping // RFC 5780; reserved, never assigned
+    AddressDependentMapping     // RFC 5780, "symmetric"; with adm_or_stricter, means "not EIM"
+    AddressPortDependentMapping // RFC 5780, "symmetric"; only from Tests II and III
     Blocked                     // all probes failed
 )
 
@@ -266,17 +267,23 @@ With only basic STUN Binding responses (no `CHANGE-REQUEST`), we can determine:
 
 - **Mapping behavior:**
   - Two servers on different IPs, probed from the same local port, return the *same* mapped endpoint → Endpoint-Independent Mapping
-  - Different mapped endpoints → Address-Dependent or Address-Port-Dependent Mapping. v0.1 cannot distinguish ADM from APDM without `CHANGE-REQUEST`; it reports "ADM or stricter" and emits warning `adm_or_stricter`.
+  - Different mapped endpoints → Address-Dependent or Address-Port-Dependent Mapping. Two servers cannot separate them, so natcheck reports ADM with warning `adm_or_stricter` unless Tests II and III refine it (see Mapping tests below; `TestClassify_MappingTest`).
 
 Mappings that agree across fewer than two server IPs read `Unknown` with warning `insufficient_server_diversity`: one IP cannot separate EIM from ADM.
+
+When every successful probe, in every address family, maps to one of this host's interface addresses with the port it left from, the warning `no_nat` reports that nothing on the path translated it. One probe is enough. The type, legacy name and forecast stay those of the mapping (`TestClassify_NoNAT`, `TestProbe_Untranslated`, `TestRun_MappingBehaviorOverRealSockets`).
 
 Filtering needs `CHANGE-REQUEST`, covered below.
 
 ## CGNAT detection
 
-If the observed public IP falls in `100.64.0.0/10` (RFC 6598 shared address space), emit warning `cgnat_detected`. CGNAT typically prevents inbound direct P2P but doesn't prevent outbound STUN.
+When an address family's first mapped address is in `100.64.0.0/10` (RFC 6598 shared address space), the server sits inside a carrier or overlay network, such as a tailnet. The request never crossed the NAT between that network and the internet, which is the one peers see, so natcheck emits warning `cgnat_detected` and forecasts `unknown` (`TestClassify`).
 
-Forecast on CGNAT: `DirectP2P = "unknown"`. Real-world direct-P2P success on CGNAT varies by carrier; returning `unknown` is the honest answer in the absence of a confident signal.
+Against public servers this does not fire: a carrier NAT translates the range before the request leaves the carrier. Behind a carrier NAT the probes cross it, so the mapping verdict covers every NAT on the path, the carrier's included (`TestRun_MappingBehaviorOverRealSockets`, the chained NAT cases).
+
+natcheck does not infer a carrier from this host's own address: an address in `100.64.0.0/10` can equally come from Tailscale, another overlay or a pod network.
+
+A server on a private network (RFC 1918, ULA) has the same blind spot and is not flagged (`TestClassify`): test labs put a NAT's outside on private addresses, so a private mapped address alone does not show that the path stopped short.
 
 ## Concurrency model
 
@@ -405,6 +412,14 @@ A Test 2 or Test 3 reply that lacks the change asked for, or an error reply, mea
 
 If the server doesn't advertise `OTHER-ADDRESS`, all filtering tests skip; `WarnFilteringSkippedNoChangeRequest` is emitted; `filtering.behavior = "untested"`.
 
+### Mapping tests (RFC 5780 §4.3)
+
+After Tests 2 and 3, on the same socket, natcheck sends Test II to `OTHER-ADDRESS`'s IP with the target's port and Test III to `OTHER-ADDRESS`. They run last because a request to `OTHER-ADDRESS`'s IP opens an address-dependent filter for Test 2's reply (`TestProbeFiltering_MappingTests`). They also run when the server ignored `CHANGE-REQUEST`, and not after a local fault; Test III is not sent when Test II gets no reply (`TestProbeFiltering_MappingTestsAfterIgnoredChangeRequest`, `TestProbeFiltering_LocalFaultIsNotFiltering`). Each gets the same window as a filtering test, so with Test 1 the sequence waits on at most five windows: 3.75s at the 1.5s filtering budget, stated in `--timeout`'s help (`TestProbeFiltering_MappingTests`, `TestSendBindingAndWait_SilenceEndsAtWindow`, `TestRun_Help`).
+
+Apart from the hairpin tag, sent to the mapped endpoint a server reports, these are the only packets sent to an address a server chose. They are skipped unless `OTHER-ADDRESS` has the target's address family and scope (loopback, link-local, private, public, or the same special-purpose range, such as `100.64.0.0/10`), is not in a prefix that embeds an IPv4 address (NAT64, Teredo, 6to4), is in `2000::/3` when it is a public IPv6 address, and has a port other than the target's; on the target's port both tests would reach one endpoint (`TestMappingTestAllowed`).
+
+When both get a reply, Test II's mapping differs from Test 1's and the verdict is ADM, different Test II and III mappings make it APDM and equal ones leave ADM; either way `adm_or_stricter` is dropped. The tests never produce EIM and never replace Unknown, so one RFC 5780 server cannot stand in for two. Verdicts combine address families, so they refine one only when the other family's probes alone classify Unknown (`TestClassify_MappingTest`).
+
 ## Hairpinning detection
 
 Two local UDP sockets, parallel with mapping probes (≤200ms parallel cost in the common case — two extra STUN round-trips executed concurrently with the mapping probes; bounded by `hairpinTimeoutCap` in `internal/cli`):
@@ -449,7 +464,6 @@ func (s *Server) Serve(ctx context.Context, conn net.PacketConn) error
 | Mapping only (no filtering, no hairpinning) | EIM reads `possible`; `likely` needs measured endpoint-independent filtering |
 | + Filtering data | `unknown` cases drop where filtering disambiguates EIM-with-restrictive-filtering from true APDM. `possible` starts emitting for EIM × Address-Dependent Filtering combinations. |
 | + Hairpinning data | Refines the `possible` / `likely` boundary for cases where hairpinning matters (e.g., behind-the-same-NAT peers). |
-| + CGNAT calibration sample (issue #6) | Carrier-tagged `possible` or `unlikely` replaces `unknown` for matching public IPs. |
 
 Forecast field stays singular. The UX promise — "one command, one answer" — is preserved.
 

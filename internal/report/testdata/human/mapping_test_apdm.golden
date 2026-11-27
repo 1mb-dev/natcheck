@@ -1,0 +1,10 @@
+Direct P2P: unlikely
+NAT type: Address and Port-Dependent Mapping (symmetric)
+Public endpoint: 203.0.113.45:51820
+Filtering: address-and-port-dependent (tested against stun.example.org:3478)
+
+Probes:
+  stun.example.org:3478    rtt=18ms  mapped=203.0.113.45:51820
+  stun.l.google.com:19302  rtt=24ms  mapped=203.0.113.45:51824
+
+Hairpinning not tested (local socket setup, STUN probe or listen read failed, or --timeout ran out).

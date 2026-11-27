@@ -40,9 +40,9 @@ type FilteringFunc func(s probe.Server, target netip.AddrPort, timeout time.Dura
 // server. Default impl is probe.ProbeHairpinning; tests inject stubs.
 type HairpinFunc func(ctx context.Context, s probe.Server, timeout time.Duration) probe.HairpinningResult
 
-// filteringTimeoutCap bounds the wall-clock spent on the §4.4 sequence so
-// it doesn't extend mapping latency unbounded. ProbeFiltering subdivides
-// internally across Tests 1/2/3.
+// filteringTimeoutCap bounds the timeout passed to ProbeFiltering, which runs
+// after the mapping probes and adds up to probe.FilteringMaxDuration of that
+// timeout.
 const filteringTimeoutCap = 1500 * time.Millisecond
 
 // hairpinTimeoutCap bounds the listen-window for the hairpin tagged-packet
@@ -211,7 +211,7 @@ func parseFlags(args []string, errOut io.Writer) (*options, error) {
 	var servers serverList
 
 	fs.Var(&servers, "server", "STUN server `host:port` (repeatable; overrides defaults)")
-	fs.DurationVar(&opts.timeout, "timeout", 5*time.Second, "total mapping-probe `duration` (filtering classification adds up to 1.5s when applicable)")
+	fs.DurationVar(&opts.timeout, "timeout", 5*time.Second, fmt.Sprintf("total mapping-probe `duration` (filtering and mapping tests add up to %s when a server advertises OTHER-ADDRESS)", probe.FilteringMaxDuration(filteringTimeoutCap)))
 	fs.BoolVar(&opts.json, "json", false, "emit JSON instead of human-readable report")
 	fs.BoolVar(&opts.verbose, "verbose", false, "log each STUN transaction to stderr")
 	fs.BoolVar(&opts.showVersion, "version", false, "print version and exit")

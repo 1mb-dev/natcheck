@@ -265,6 +265,19 @@ func TestClassify(t *testing.T) {
 			wantTURN:   false,
 		},
 		{
+			name: "private mapped address — not CGNAT",
+			results: []probe.Result{
+				ok("google", 19302, "192.168.1.2:51820", 10*time.Millisecond),
+				ok("cloudflare", 3478, "192.168.1.2:51820", 20*time.Millisecond),
+			},
+			wantType:       EndpointIndependentMapping,
+			wantLegacy:     "cone",
+			wantCGNAT:      false,
+			wantP2P:        "possible",
+			wantTURN:       false,
+			wantWarnAbsent: []string{WarnCGNATDetected},
+		},
+		{
 			name: "upper CGNAT edge 100.127.255.255 — still CGNAT",
 			results: []probe.Result{
 				ok("google", 19302, "100.127.255.255:51820", 10*time.Millisecond),
@@ -797,6 +810,107 @@ func TestClassify_IPv4UntestedWarning(t *testing.T) {
 			v := Classify(tc.results, nil, nil)
 			if got := slices.Contains(v.Warnings, WarnIPv4Untested); got != tc.want {
 				t.Errorf("warning present = %v, want %v; warnings=%v", got, tc.want, v.Warnings)
+			}
+		})
+	}
+}
+
+func TestClassify_NoNAT(t *testing.T) {
+	untranslated := func(r probe.Result) probe.Result { r.Untranslated = true; return r }
+	v4 := func(host string) probe.Result { return ok(host, 3478, "203.0.113.45:51820", time.Millisecond) }
+	v6 := func(host string) probe.Result { return ok(host, 3478, "[2001:db8::1]:51820", time.Millisecond) }
+
+	cases := []struct {
+		name    string
+		results []probe.Result
+		want    bool
+	}{
+		{"every probe untranslated", []probe.Result{untranslated(v6("a")), untranslated(v6("b"))}, true},
+		{"one probe, untranslated", []probe.Result{untranslated(v6("a")), fail("b", 3478)}, true},
+		{"one of two untranslated", []probe.Result{untranslated(v4("a")), v4("b")}, false},
+		{"none untranslated", []probe.Result{v4("a"), v4("b")}, false},
+		{"IPv6 untranslated, IPv4 translated", []probe.Result{untranslated(v6("a")), untranslated(v6("b")), v4("c"), v4("d")}, false},
+		{"both families untranslated", []probe.Result{untranslated(v6("a")), untranslated(v4("c"))}, true},
+		{"failed probe flagged", []probe.Result{v4("a"), v4("b"), untranslated(fail("c", 3478))}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Classify(tc.results, nil, nil)
+			if got := slices.Contains(v.Warnings, WarnNoNAT); got != tc.want {
+				t.Errorf("no_nat present = %v, want %v; warnings=%v", got, tc.want, v.Warnings)
+			}
+			// The warning reports; it does not judge.
+			plain := make([]probe.Result, len(tc.results))
+			for i, r := range tc.results {
+				r.Untranslated = false
+				plain[i] = r
+			}
+			base := Classify(plain, nil, nil)
+			if v.Type != base.Type || v.LegacyName != base.LegacyName || v.Forecast != base.Forecast {
+				t.Errorf("verdict moved: %v %q %+v, want %v %q %+v", v.Type, v.LegacyName, v.Forecast, base.Type, base.LegacyName, base.Forecast)
+			}
+		})
+	}
+}
+
+func TestClassify_MappingTest(t *testing.T) {
+	adm := []probe.Result{
+		ok("a", 3478, "203.0.113.45:51820", time.Millisecond),
+		ok("b", 3478, "203.0.113.45:51821", time.Millisecond),
+	}
+	eim := []probe.Result{
+		ok("a", 3478, "203.0.113.45:51820", time.Millisecond),
+		ok("b", 3478, "203.0.113.45:51820", time.Millisecond),
+	}
+	single := []probe.Result{ok("a", 3478, "203.0.113.45:51820", time.Millisecond), fail("b", 3478)}
+	v6One := ok("c", 3478, "[2001:db8::1]:51820", time.Millisecond)
+	v6ADM := []probe.Result{
+		ok("c", 3478, "[2001:db8::1]:51820", time.Millisecond),
+		ok("d", 3478, "[2001:db8::1]:51821", time.Millisecond),
+	}
+	mapping := func(test1, altIP, altEndpoint string) *probe.FilteringResult {
+		f := &probe.FilteringResult{Test1Mapped: netip.MustParseAddrPort(test1), Err: probe.ErrFilteringNotSupported}
+		if altIP != "" {
+			f.AltIPMapped = netip.MustParseAddrPort(altIP)
+		}
+		if altEndpoint != "" {
+			f.AltEndpointMapped = netip.MustParseAddrPort(altEndpoint)
+		}
+		return f
+	}
+	portDependent := mapping("203.0.113.45:40000", "203.0.113.45:40001", "203.0.113.45:40002")
+	addressOnly := mapping("203.0.113.45:40000", "203.0.113.45:40001", "203.0.113.45:40001")
+
+	cases := []struct {
+		name       string
+		results    []probe.Result
+		filtering  *probe.FilteringResult
+		wantType   NATType
+		wantADMOrS bool
+	}{
+		{"II and III differ: APDM", adm, portDependent, AddressPortDependentMapping, false},
+		{"II and III agree: ADM", adm, addressOnly, AddressDependentMapping, false},
+		{"II agrees with I: tests do not apply", adm, mapping("203.0.113.45:40000", "203.0.113.45:40000", "203.0.113.45:40000"), AddressDependentMapping, true},
+		{"II agrees with I, III differs: tests do not apply", adm, mapping("203.0.113.45:40000", "203.0.113.45:40000", "203.0.113.45:40002"), AddressDependentMapping, true},
+		{"Test III unanswered", adm, mapping("203.0.113.45:40000", "203.0.113.45:40001", ""), AddressDependentMapping, true},
+		{"no filtering run", adm, nil, AddressDependentMapping, true},
+		{"EIM stays EIM", eim, portDependent, EndpointIndependentMapping, false},
+		{"Unknown stays Unknown", single, portDependent, Unknown, false},
+		{"tested family decides", append(slices.Clone(adm), v6One), portDependent, AddressPortDependentMapping, false},
+		{"other family is ADM too", append(slices.Clone(adm), v6ADM...), portDependent, AddressDependentMapping, true},
+		{"tests ran on the other family", append(slices.Clone(adm), v6One), mapping("[2001:db8::1]:40000", "[2001:db8::1]:40001", "[2001:db8::1]:40002"), AddressDependentMapping, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Classify(tc.results, tc.filtering, nil)
+			if v.Type != tc.wantType {
+				t.Errorf("Type = %v, want %v", v.Type, tc.wantType)
+			}
+			if got := slices.Contains(v.Warnings, WarnADMOrStricter); got != tc.wantADMOrS {
+				t.Errorf("adm_or_stricter present = %v, want %v; warnings=%v", got, tc.wantADMOrS, v.Warnings)
+			}
+			if tc.wantType == AddressPortDependentMapping && (v.LegacyName != "symmetric" || v.Forecast.DirectP2P != "unlikely" || !v.Forecast.TURNRequired) {
+				t.Errorf("APDM verdict = %q %+v, want symmetric, unlikely, TURN", v.LegacyName, v.Forecast)
 			}
 		})
 	}

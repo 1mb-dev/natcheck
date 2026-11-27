@@ -56,7 +56,8 @@ type transactionID = [stun.TransactionIDSize]byte
 // replies by source: every packet from the network is untrusted, and a bad one
 // must be dropped without affecting any other probe.
 type mappingRun struct {
-	listen func(network, address string) (net.PacketConn, error)
+	listen    func(network, address string) (net.PacketConn, error)
+	hostAddrs func() ([]net.Addr, error)
 
 	mu      sync.Mutex
 	sockets map[string]familySocket
@@ -93,9 +94,10 @@ type transactionReply struct {
 
 func newMappingRun() *mappingRun {
 	return &mappingRun{
-		listen:  net.ListenPacket,
-		sockets: map[string]familySocket{},
-		pending: map[transactionID]*transaction{},
+		listen:    net.ListenPacket,
+		hostAddrs: net.InterfaceAddrs,
+		sockets:   map[string]familySocket{},
+		pending:   map[transactionID]*transaction{},
 	}
 }
 
@@ -170,8 +172,33 @@ func (r *mappingRun) probeAddrs(ctx context.Context, s Server, ips []netip.Addr)
 		res.Mapped = reply.binding.mapped
 		res.Other = reply.binding.other
 		res.RTT = reply.rtt
+		res.Untranslated = r.isHostEndpoint(tx.conn, res.Mapped)
 	}
 	return res
+}
+
+// isHostEndpoint reports whether mapped is an interface address of this host
+// with conn's port. The sockets bind the wildcard address, so the IP comes from
+// the interface list. A failed lookup reads as translated.
+func (r *mappingRun) isHostEndpoint(conn net.PacketConn, mapped netip.AddrPort) bool {
+	local, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || mapped.Port() != uint16(local.Port) {
+		return false
+	}
+	addrs, err := r.hostAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip, ok := netip.AddrFromSlice(ipnet.IP); ok && ip.Unmap() == mapped.Addr() {
+			return true
+		}
+	}
+	return false
 }
 
 // await resends the same request, keeping the transaction ID, so a reply to any

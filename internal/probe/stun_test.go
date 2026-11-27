@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -23,6 +24,7 @@ const (
 	behaviorWrongType                      // respond with BindingError instead of BindingSuccess
 	behaviorOmitMapped                     // BindingSuccess without XOR-MAPPED-ADDRESS attribute
 	behaviorGarbled                        // write random bytes that don't parse as STUN
+	behaviorShiftPort                      // valid BindingSuccess mapping the client to its port + 1
 )
 
 // fakeSTUN is an in-process STUN responder for tests. No network access required.
@@ -132,6 +134,11 @@ func buildResponse(behavior fakeBehavior, req *stun.Message, udp *net.UDPAddr) [
 			return nil
 		}
 		return resp.Raw
+
+	case behaviorShiftPort:
+		addr, _ := netip.AddrFromSlice(udp.IP)
+		src := netip.AddrPortFrom(addr.Unmap(), uint16(udp.Port+1))
+		return stunserver.New(stunserver.Options{}).Handle(req.Raw, src)
 
 	case behaviorGarbled:
 		// 8 bytes of non-STUN noise; too short to parse as a STUN message.
@@ -466,5 +473,39 @@ func TestAwait_DeliveredReplyWinsOverDoneContext(t *testing.T) {
 		if _, err := tx.await(ctx); err != nil {
 			t.Fatalf("run %d: err = %v, want the delivered reply", i, err)
 		}
+	}
+}
+
+func TestProbe_Untranslated(t *testing.T) {
+	loopback := []net.Addr{&net.IPNet{IP: net.IPv4(127, 0, 0, 1), Mask: net.CIDRMask(8, 32)}}
+	cases := []struct {
+		name      string
+		behavior  fakeBehavior
+		hostAddrs func() ([]net.Addr, error)
+		want      bool
+	}{
+		{"own address and port", behaviorNormal, func() ([]net.Addr, error) { return loopback, nil }, true},
+		{"port rewritten", behaviorShiftPort, func() ([]net.Addr, error) { return loopback, nil }, false},
+		{"address not on this host", behaviorNormal, func() ([]net.Addr, error) { return nil, nil }, false},
+		{"interface lookup fails", behaviorNormal, func() ([]net.Addr, error) { return loopback, errors.New("no interfaces") }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := fakeServer(newFakeSTUN(t, 0, tc.behavior))
+			run := newMappingRun()
+			defer run.close()
+			run.hostAddrs = tc.hostAddrs
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			res := run.probe(ctx, s)
+			if res.Err != nil {
+				t.Fatalf("probe: %v", res.Err)
+			}
+			if res.Untranslated != tc.want {
+				t.Errorf("Untranslated = %v (Mapped %v), want %v", res.Untranslated, res.Mapped, tc.want)
+			}
+		})
 	}
 }

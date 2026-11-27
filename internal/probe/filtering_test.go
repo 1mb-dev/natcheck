@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -39,6 +41,7 @@ type fakeFilteringServer struct {
 	respondCount int
 	noiseAfter   int                                   // if > 0, dispatcher injects one bogus-TXID packet after the Nth real response
 	lost         map[[stun.TransactionIDSize]byte]bool // non-nil: lose the first copy of each CHANGE-REQUEST
+	received     []request                             // every request, in arrival order
 	done         chan struct{}
 	wg           sync.WaitGroup
 }
@@ -175,6 +178,9 @@ func (f *fakeFilteringServer) serve() {
 // to the correct outbound corner per RFC 5780 §3, and writes from that corner.
 func (f *fakeFilteringServer) dispatch(received corner, data []byte, src net.Addr) {
 	changeIP, changePort, ok := stunserver.ParseChangeRequest(data)
+	f.mu.Lock()
+	f.received = append(f.received, request{at: received, change: ok})
+	f.mu.Unlock()
 	target := received
 	if ok && f.loses(data) {
 		return
@@ -245,6 +251,17 @@ func altPortFrom(c corner) corner {
 }
 func altIPAltPortFrom(c corner) corner {
 	return [4]corner{cornerAltBoth, cornerAltIP, cornerAltPort, cornerPrimary}[c]
+}
+
+type request struct {
+	at     corner
+	change bool // carried CHANGE-REQUEST
+}
+
+func (f *fakeFilteringServer) requests() []request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]request(nil), f.received...)
 }
 
 // --- tests ---
@@ -345,8 +362,8 @@ func TestProbeFiltering_ZeroTimeoutFallsBack(t *testing.T) {
 	if res.Err != nil {
 		t.Fatalf("Err = %v, want nil", res.Err)
 	}
-	// Worst case: 3 tests × 500ms each = 1.5s; loopback should be much faster.
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
+	// Worst case: five windows of 500ms = 2.5s; loopback should be much faster.
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
 		t.Fatalf("elapsed %v exceeds fallback budget", elapsed)
 	}
 }
@@ -403,6 +420,7 @@ type failAfterReplyConn struct {
 	fail    string
 	mu      sync.Mutex
 	replied bool
+	started int // SetWriteDeadline calls once failing: one per test started
 }
 
 var (
@@ -434,6 +452,11 @@ func (c *failAfterReplyConn) SetReadDeadline(t time.Time) error {
 }
 
 func (c *failAfterReplyConn) SetWriteDeadline(t time.Time) error {
+	if c.failing() {
+		c.mu.Lock()
+		c.started++
+		c.mu.Unlock()
+	}
 	if c.fail == "SetWriteDeadline" && c.failing() {
 		return errSetWriteDeadline
 	}
@@ -461,12 +484,14 @@ func TestProbeFiltering_LocalFaultIsNotFiltering(t *testing.T) {
 		t.Run(tc.fail, func(t *testing.T) {
 			f := newFakeFilteringServer(t)
 			s := f.primaryServer()
+			var conn *failAfterReplyConn
 			listen := func(network, address string) (net.PacketConn, error) {
 				c, err := net.ListenPacket(network, address)
 				if err != nil {
 					return nil, err
 				}
-				return &failAfterReplyConn{PacketConn: c, fail: tc.fail}, nil
+				conn = &failAfterReplyConn{PacketConn: c, fail: tc.fail}
+				return conn, nil
 			}
 			res := probeFilteringWith(listen, s, netip.AddrPortFrom(netip.MustParseAddr(s.Host), uint16(s.Port)), time.Second)
 			if !errors.Is(res.Err, tc.want) || errors.Is(res.Err, ErrFilteringNotSupported) || errors.Is(res.Err, ErrTest1Failed) {
@@ -475,20 +500,26 @@ func TestProbeFiltering_LocalFaultIsNotFiltering(t *testing.T) {
 			if res.Test2Received || res.Test3Received {
 				t.Errorf("Test2Received = %v, Test3Received = %v; want false, false", res.Test2Received, res.Test3Received)
 			}
+			conn.mu.Lock()
+			started := conn.started
+			conn.mu.Unlock()
+			if started != 2 {
+				t.Errorf("%d tests started after the fault, want Tests 2 and 3 only: Tests II and III ran", started)
+			}
 		})
 	}
 }
 
-// startChangeIgnoringServer advertises OTHER-ADDRESS but always replies from its
-// own address. reply decides which requests get an answer.
-func startChangeIgnoringServer(t *testing.T, reply func(req []byte) bool) Server {
+// startChangeIgnoringServer advertises other as OTHER-ADDRESS but always replies
+// from its own address. reply decides which requests get an answer.
+func startChangeIgnoringServer(t *testing.T, other netip.AddrPort, reply func(req []byte) bool) Server {
 	t.Helper()
 	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	srv := stunserver.New(stunserver.Options{Other: netip.MustParseAddrPort("198.51.100.1:3479")})
+	srv := stunserver.New(stunserver.Options{Other: other})
 	go func() {
 		buf := make([]byte, 1500)
 		for {
@@ -521,7 +552,7 @@ func TestProbeFiltering_ServerIgnoresChangeRequest(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			server := startChangeIgnoringServer(t, tt.reply)
+			server := startChangeIgnoringServer(t, netip.MustParseAddrPort("198.51.100.1:3479"), tt.reply)
 			res := probeFiltering(server, 300*time.Millisecond)
 			if !errors.Is(res.Err, ErrFilteringNotSupported) {
 				t.Fatalf("Err = %v, want ErrFilteringNotSupported; T2=%v T3=%v", res.Err, res.Test2Received, res.Test3Received)
@@ -641,6 +672,195 @@ func TestChangeRequestIgnored(t *testing.T) {
 			got := changeRequestIgnored(netip.MustParseAddrPort(tt.target), netip.MustParseAddrPort(tt.other), reply(tt.t2), reply(tt.t3))
 			if got != tt.want {
 				t.Errorf("changeRequestIgnored = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestProbeFiltering_MappingTests: Tests II and III go to OTHER-ADDRESS's IP
+// with the primary port, then to OTHER-ADDRESS, and only after Tests 2 and 3.
+// A request to OTHER-ADDRESS first would open an address-dependent filter for
+// Test 2's reply.
+func TestProbeFiltering_MappingTests(t *testing.T) {
+	f := newFakeFilteringServer(t)
+	res := probeFiltering(f.primaryServer(), 2*time.Second)
+	if res.Err != nil {
+		t.Fatalf("Err = %v, want nil", res.Err)
+	}
+	// Loopback has no NAT, so every test maps to the same endpoint.
+	if res.AltIPMapped != res.Test1Mapped || res.AltEndpointMapped != res.Test1Mapped {
+		t.Fatalf("AltIPMapped = %v, AltEndpointMapped = %v, want both %v", res.AltIPMapped, res.AltEndpointMapped, res.Test1Mapped)
+	}
+
+	// On loopback OTHER-ADDRESS's IP is the primary IP, so Test II lands on
+	// the primary corner.
+	want := []request{{cornerPrimary, false}, {cornerPrimary, true}, {cornerPrimary, true}, {cornerPrimary, false}, {cornerAltBoth, false}}
+	if got := f.requests(); !slices.Equal(got, want) {
+		t.Fatalf("requests = %v, want %v", got, want)
+	}
+}
+
+func TestProbeFiltering_MappingTestsNeedBothReplies(t *testing.T) {
+	// Test III goes to the alt-both corner, which never answers.
+	f := newFakeFilteringServer(t, cornerAltBoth)
+	res := probeFiltering(f.primaryServer(), time.Second)
+	if res.AltIPMapped.IsValid() || res.AltEndpointMapped.IsValid() {
+		t.Fatalf("AltIPMapped = %v, AltEndpointMapped = %v, want both zero", res.AltIPMapped, res.AltEndpointMapped)
+	}
+}
+
+// TestProbeFiltering_MappingTestsAfterIgnoredChangeRequest: Tests II and III run
+// when the server ignored CHANGE-REQUEST, and Test III is not sent when Test II
+// gets no reply.
+func TestProbeFiltering_MappingTestsAfterIgnoredChangeRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		testII bool // the server answers plain requests after Test 1
+	}{
+		{"both answered", true},
+		{"Test II silent", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var atOther atomic.Int32
+			alt := startChangeIgnoringServer(t, netip.MustParseAddrPort("198.51.100.1:3479"), func([]byte) bool {
+				atOther.Add(1)
+				return true
+			})
+			var plain atomic.Int32
+			other := netip.AddrPortFrom(netip.MustParseAddr(alt.Host), uint16(alt.Port))
+			server := startChangeIgnoringServer(t, other, func(req []byte) bool {
+				if _, _, change := stunserver.ParseChangeRequest(req); change {
+					return true
+				}
+				return plain.Add(1) == 1 || tc.testII
+			})
+			res := probeFiltering(server, 300*time.Millisecond)
+			if !errors.Is(res.Err, ErrFilteringNotSupported) {
+				t.Fatalf("Err = %v, want ErrFilteringNotSupported", res.Err)
+			}
+			if got := res.AltIPMapped.IsValid() && res.AltEndpointMapped.IsValid(); got != tc.testII {
+				t.Errorf("AltIPMapped = %v, AltEndpointMapped = %v, want both set = %v", res.AltIPMapped, res.AltEndpointMapped, tc.testII)
+			}
+			if !tc.testII && atOther.Load() != 0 {
+				t.Errorf("Test III sent after a silent Test II (%d requests at OTHER-ADDRESS)", atOther.Load())
+			}
+		})
+	}
+}
+
+// TestSendBindingAndWait_SilenceEndsAtWindow: a test whose peer never answers
+// returns no response, and no read waits past its window, resends included.
+func TestSendBindingAndWait_SilenceEndsAtWindow(t *testing.T) {
+	for _, window := range []time.Duration{100 * time.Millisecond, 700 * time.Millisecond} {
+		t.Run(window.String(), func(t *testing.T) {
+			t.Parallel()
+			silent, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			defer func() { _ = silent.Close() }()
+			c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			conn := &deadlineLogConn{PacketConn: c}
+			defer func() { _ = conn.Close() }()
+			_, err = sendBindingAndWait(context.Background(), conn, silent.LocalAddr(), window, nil)
+			if !errors.Is(err, errNoResponse) {
+				t.Fatalf("err = %v, want errNoResponse", err)
+			}
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			if len(conn.deadlines) == 0 {
+				t.Fatal("no read deadline set")
+			}
+			// The window opens before the first send, so no deadline may pass
+			// firstSend + window.
+			for _, d := range conn.deadlines {
+				if over := d.Sub(conn.firstSend) - window; over > 0 {
+					t.Errorf("read deadline %v past the %v window", over, window)
+				}
+			}
+		})
+	}
+}
+
+// deadlineLogConn records when it first sends and every read deadline set.
+type deadlineLogConn struct {
+	net.PacketConn
+	mu        sync.Mutex
+	firstSend time.Time
+	deadlines []time.Time
+}
+
+func (c *deadlineLogConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	c.mu.Lock()
+	if c.firstSend.IsZero() {
+		c.firstSend = time.Now()
+	}
+	c.mu.Unlock()
+	return c.PacketConn.WriteTo(b, addr)
+}
+
+func (c *deadlineLogConn) SetReadDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.deadlines = append(c.deadlines, t)
+	c.mu.Unlock()
+	return c.PacketConn.SetReadDeadline(t)
+}
+
+func TestMappingTestAllowed(t *testing.T) {
+	public := netip.MustParseAddrPort("203.0.113.10:3478")
+	private := netip.MustParseAddrPort("192.168.1.10:3478")
+	loopback := netip.MustParseAddrPort("127.0.0.1:3478")
+	publicV6 := netip.MustParseAddrPort("[2001:db8::10]:3478")
+	cases := []struct {
+		name          string
+		target, other netip.AddrPort
+		want          bool
+	}{
+		{"public target, public other", public, netip.MustParseAddrPort("203.0.113.11:3479"), true},
+		{"other shares the IP, new port", public, netip.MustParseAddrPort("203.0.113.10:3479"), true},
+		{"private target, private other", private, netip.MustParseAddrPort("192.168.1.11:3479"), true},
+		{"loopback target, loopback other", loopback, netip.MustParseAddrPort("127.0.0.1:3479"), true},
+		{"other on the target's port", public, netip.MustParseAddrPort("203.0.113.11:3478"), false},
+		{"other port zero", public, netip.MustParseAddrPort("203.0.113.11:0"), false},
+		{"other in another family", public, netip.MustParseAddrPort("[2001:db8::1]:3479"), false},
+		{"public target, private other", public, netip.MustParseAddrPort("192.168.1.11:3479"), false},
+		{"public target, loopback other", public, netip.MustParseAddrPort("127.0.0.1:3479"), false},
+		{"public target, link-local other", public, netip.MustParseAddrPort("169.254.1.1:3479"), false},
+		{"loopback target, public other", loopback, netip.MustParseAddrPort("203.0.113.11:3479"), false},
+		{"multicast other", public, netip.MustParseAddrPort("224.0.0.1:3479"), false},
+		{"unspecified other", public, netip.MustParseAddrPort("0.0.0.0:3479"), false},
+		{"no other", public, netip.AddrPort{}, false},
+		{"public target, shared-address other", public, netip.MustParseAddrPort("100.100.1.5:3479"), false},
+		{"shared-address target, shared-address other", netip.MustParseAddrPort("100.64.0.10:3478"), netip.MustParseAddrPort("100.100.1.5:3479"), true},
+		{"shared-address target, benchmark other", netip.MustParseAddrPort("100.64.0.10:3478"), netip.MustParseAddrPort("198.18.0.1:3479"), false},
+		{"public target, this-network other", public, netip.MustParseAddrPort("0.1.2.3:3479"), false},
+		{"public target, IETF protocol other", public, netip.MustParseAddrPort("192.0.0.9:3479"), false},
+		{"public target, benchmark other", public, netip.MustParseAddrPort("198.18.0.1:3479"), false},
+		{"public target, reserved other", public, netip.MustParseAddrPort("240.0.0.1:3479"), false},
+		{"public target, broadcast other", public, netip.MustParseAddrPort("255.255.255.255:3479"), false},
+		{"public IPv6 target, public IPv6 other", publicV6, netip.MustParseAddrPort("[2001:db8::11]:3479"), true},
+		{"public IPv6 target, NAT64 other", publicV6, netip.MustParseAddrPort("[64:ff9b::a00:1]:3479"), false},
+		{"public IPv6 target, local NAT64 other", publicV6, netip.MustParseAddrPort("[64:ff9b:1::a00:1]:3479"), false},
+		{"public IPv6 target, Teredo other", publicV6, netip.MustParseAddrPort("[2001:0:a00:1::1]:3479"), false},
+		{"public IPv6 target, 6to4 other", publicV6, netip.MustParseAddrPort("[2002:a00:1::1]:3479"), false},
+		{"public IPv6 target, site-local other", publicV6, netip.MustParseAddrPort("[fec0::1]:3479"), false},
+		{"public IPv6 target, IPv4-compatible other", publicV6, netip.MustParseAddrPort("[::a00:1]:3479"), false},
+		{"public IPv6 target, SIIT other", publicV6, netip.MustParseAddrPort("[::ffff:0:a00:1]:3479"), false},
+		{"public IPv6 target, discard-only other", publicV6, netip.MustParseAddrPort("[100::1]:3479"), false},
+		{"public IPv6 target, IETF protocol other", publicV6, netip.MustParseAddrPort("[2001:2::1]:3479"), false},
+		{"IETF protocol target, IETF protocol other", netip.MustParseAddrPort("[2001:2::10]:3478"), netip.MustParseAddrPort("[2001:2::11]:3479"), true},
+		{"IPv6 loopback target, loopback other", netip.MustParseAddrPort("[::1]:3478"), netip.MustParseAddrPort("[::1]:3479"), true},
+		{"NAT64 target, NAT64 other", netip.MustParseAddrPort("[64:ff9b::cb00:710a]:3478"), netip.MustParseAddrPort("[64:ff9b::a00:1]:3479"), false},
+		{"6to4 target, 6to4 other", netip.MustParseAddrPort("[2002:cb00:710a::1]:3478"), netip.MustParseAddrPort("[2002:a00:1::1]:3479"), false},
+		{"NAT64 target, public IPv6 other", netip.MustParseAddrPort("[64:ff9b::cb00:710a]:3478"), netip.MustParseAddrPort("[2001:db8::11]:3479"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mappingTestAllowed(tc.target, tc.other); got != tc.want {
+				t.Errorf("mappingTestAllowed(%v, %v) = %v, want %v", tc.target, tc.other, got, tc.want)
 			}
 		})
 	}

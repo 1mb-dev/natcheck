@@ -212,6 +212,7 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 		wantType     string
 		wantForecast string
 		wantCode     int
+		wantNoNAT    bool
 	}{
 		{
 			name:         "no NAT",
@@ -219,6 +220,7 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 			wantType:     "EIM",
 			wantForecast: "possible",
 			wantCode:     0,
+			wantNoNAT:    true,
 		},
 		{
 			name: "endpoint-independent NAT",
@@ -238,6 +240,35 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 			wantForecast: "unlikely",
 			wantCode:     1,
 		},
+		// A carrier NAT in front of the home NAT: the probes cross both, so the
+		// verdict covers both (docs/design.md § CGNAT detection).
+		{
+			name: "endpoint-independent NAT behind a per-destination NAT",
+			targets: func(t *testing.T, servers []*net.UDPAddr) []*net.UDPAddr {
+				return startNATSim(t, startNATSim(t, servers, true), false)
+			},
+			wantType:     "ADM",
+			wantForecast: "unlikely",
+			wantCode:     1,
+		},
+		{
+			name: "per-destination NAT behind an endpoint-independent NAT",
+			targets: func(t *testing.T, servers []*net.UDPAddr) []*net.UDPAddr {
+				return startNATSim(t, startNATSim(t, servers, false), true)
+			},
+			wantType:     "ADM",
+			wantForecast: "unlikely",
+			wantCode:     1,
+		},
+		{
+			name: "endpoint-independent NAT behind an endpoint-independent NAT",
+			targets: func(t *testing.T, servers []*net.UDPAddr) []*net.UDPAddr {
+				return startNATSim(t, startNATSim(t, servers, false), false)
+			},
+			wantType:     "EIM",
+			wantForecast: "possible",
+			wantCode:     0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -254,6 +285,9 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 			}
 			if code != tt.wantCode {
 				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
+			}
+			if got := slices.Contains(report.Warnings, "no_nat"); got != tt.wantNoNAT {
+				t.Errorf("no_nat present = %v, want %v; warnings=%v", got, tt.wantNoNAT, report.Warnings)
 			}
 		})
 	}
