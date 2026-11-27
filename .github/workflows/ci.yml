@@ -19,3 +19,4 @@ jobs:
     uses: 1mb-dev/.github/.github/workflows/ci-go.yml@main
     with:
       build-binary: "./cmd/natcheck"
+      golangci-lint-version: "v2.15.0"

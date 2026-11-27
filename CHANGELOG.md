@@ -25,6 +25,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - `ipv4_untested` reads "No IPv4 probe succeeded; this verdict covers IPv6 only." (#42).
 - `insufficient_server_diversity` text covers either address family (#42).
 - `cgnat_detected` text says the server sits inside a carrier or overlay network and the NAT beyond it is not measured; forecast and exit code are unchanged (#53).
+- Go 1.26.3 is the minimum version.
 
 ### Fixed
 
