@@ -27,15 +27,16 @@ func (c redirectConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 }
 
 // startReportingResponder answers every Binding request with XOR-MAPPED-ADDRESS
-// set to mapped.Addr() and the observed source port.
-func startReportingResponder(t *testing.T, mapped netip.Addr) netip.AddrPort {
+// set to mapped and the observed source port, and with other as OTHER-ADDRESS
+// when it is valid.
+func startReportingResponder(t *testing.T, mapped netip.Addr, other netip.AddrPort) netip.AddrPort {
 	t.Helper()
 	c, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
-	s := stunserver.New(stunserver.Options{})
+	s := stunserver.New(stunserver.Options{Other: other})
 	go func() {
 		buf := make([]byte, 1500)
 		for {
@@ -72,7 +73,7 @@ func TestHairpinAddrs_MappedOutsideScopeSendsNothing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			target := netip.MustParseAddr(tc.target)
-			fake := startReportingResponder(t, netip.MustParseAddr(tc.mapped))
+			fake := startReportingResponder(t, netip.MustParseAddr(tc.mapped), netip.AddrPort{})
 			server := Server{Host: tc.target, Port: 3478}
 			listen := func(string, string) (net.PacketConn, error) {
 				c, err := net.ListenPacket("udp4", "127.0.0.1:0")

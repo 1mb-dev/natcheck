@@ -80,23 +80,23 @@ func FilteringMaxDuration(timeout time.Duration) time.Duration {
 }
 
 // ProbeFiltering runs RFC 5780 §4.4 against target, the address the mapping
-// probe of server reached, then §4.3 Tests II and III when OTHER-ADDRESS allows
-// them (mappingTestAllowed). Resolving the host again could reach a host that did
-// not advertise OTHER-ADDRESS, or an address with no route. Uses one unconnected
-// UDP socket for every test so (a) the NAT mapping stays stable across
-// tests and (b) the socket can receive responses from the server's alt-IP/
-// alt-port sources (a connected UDP socket would filter those out). Each test
-// gets timeout/2, resent as sendBindingAndWait schedules; silence for the whole
-// window is the Test 2/3 verdict, not an error. Tests II and III run last:
-// sending to OTHER-ADDRESS's IP opens an address-dependent filter for Test 2's
-// reply (TestProbeFiltering_MappingTests). No ctx: cli runs filtering
-// after the mapping probes and outside their --timeout context, so timeout is
-// its only bound.
+// probe of server reached, then §4.3 Tests II and III when OTHER-ADDRESS passes
+// the checks in docs/design.md § Mapping tests. Resolving the host again could
+// reach a host that did not advertise OTHER-ADDRESS, or an address with no
+// route. Uses one unconnected UDP socket for every test so (a) the NAT mapping
+// stays stable across tests and (b) the socket can receive responses from the
+// server's alt-IP/alt-port sources (a connected UDP socket would filter those
+// out). Each test gets timeout/2, resent as sendBindingAndWait schedules;
+// silence for the whole window is the Test 2/3 verdict, not an error. Tests II
+// and III run last: sending to OTHER-ADDRESS's IP opens an address-dependent
+// filter for Test 2's reply (TestProbeFiltering_MappingTests). No ctx: cli runs
+// filtering after the mapping probes and outside their --timeout context, so
+// timeout is its only bound.
 func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
-	return probeFilteringWith(net.ListenPacket, server, target, timeout)
+	return probeFilteringWith(net.ListenPacket, net.InterfaceAddrs, server, target, timeout)
 }
 
-func probeFilteringWith(listen func(network, address string) (net.PacketConn, error), server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
+func probeFilteringWith(listen func(network, address string) (net.PacketConn, error), hostAddrs func() ([]net.Addr, error), server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
 	res := FilteringResult{Server: server}
 	if !target.IsValid() || target.Port() == 0 {
 		res.Err = fmt.Errorf("invalid target %v for %s:%d", target, server.Host, server.Port)
@@ -145,7 +145,7 @@ func probeFilteringWith(listen func(network, address string) (net.PacketConn, er
 		return res // a local fault: no later test can be trusted
 	}
 
-	if mappingTestAllowed(target, res.Test1Other) {
+	if mappingTestAllowed(target, res.Test1Other) && !reachesHostLink(res.Test1Other.Addr(), hostAddrs) {
 		res.AltIPMapped, res.AltEndpointMapped = mappingTests(conn, target, res.Test1Other, perTest)
 	}
 	return res
@@ -180,6 +180,50 @@ func mappingTestAllowed(target, other netip.AddrPort) bool {
 		return false
 	}
 	return serverChosenAllowed(target.Addr(), other.Addr())
+}
+
+// reachesHostLink reports whether other is inside a prefix of this host's
+// interfaces, or the interface lookup failed. Such an address passes
+// serverChosenAllowed yet reaches this host or a neighbour on its link; the
+// server's own reports cannot vouch for it
+// (TestProbeFiltering_MappingTestsSkipHostLink).
+func reachesHostLink(other netip.Addr, hostAddrs func() ([]net.Addr, error)) bool {
+	addrs, err := hostAddrs()
+	if err != nil {
+		return true
+	}
+	o := other.Unmap().WithZone("")
+	for _, a := range addrs {
+		if p, ok := hostPrefix(a); ok && p.Contains(o) {
+			return true
+		}
+	}
+	return false
+}
+
+// hostPrefix returns an interface address's prefix. An IPv6 prefix longer than
+// /64 is widened to /64: a DHCPv6 address is listed as /128 on a /64 link. An
+// unreadable mask gives the address alone, so the guard still covers it
+// (TestProbeFiltering_MappingTestsSkipHostLink).
+func hostPrefix(a net.Addr) (netip.Prefix, bool) {
+	ipnet, ok := a.(*net.IPNet)
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	ip, ok := netip.AddrFromSlice(ipnet.IP)
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	ip = ip.Unmap()
+	ones, bits := ipnet.Mask.Size()
+	if ip.Is6() && ones > 64 {
+		ones = 64
+	}
+	if bits != ip.BitLen() {
+		ones = ip.BitLen()
+	}
+	p, err := ip.Prefix(ones)
+	return p, err == nil
 }
 
 // serverChosenAllowed reports whether natcheck may send to addr, an address the

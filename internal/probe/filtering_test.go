@@ -113,10 +113,13 @@ func newFakeFilteringServer(t *testing.T, dropFrom ...corner) *fakeFilteringServ
 	return f
 }
 
-// probeFiltering runs ProbeFiltering on s, which must name a literal IP.
+// probeFiltering runs probeFilteringWith on s, which must name a literal IP,
+// with no host interfaces, so loopback Tests II and III are sent.
 func probeFiltering(s Server, timeout time.Duration) FilteringResult {
-	return ProbeFiltering(s, netip.AddrPortFrom(netip.MustParseAddr(s.Host), uint16(s.Port)), timeout)
+	return probeFilteringWith(net.ListenPacket, noHostAddrs, s, netip.AddrPortFrom(netip.MustParseAddr(s.Host), uint16(s.Port)), timeout)
 }
+
+func noHostAddrs() ([]net.Addr, error) { return nil, nil }
 
 func (f *fakeFilteringServer) primaryServer() Server {
 	return Server{Host: "127.0.0.1", Port: int(f.addrs[cornerPrimary].Port())}
@@ -493,7 +496,7 @@ func TestProbeFiltering_LocalFaultIsNotFiltering(t *testing.T) {
 				conn = &failAfterReplyConn{PacketConn: c, fail: tc.fail}
 				return conn, nil
 			}
-			res := probeFilteringWith(listen, s, netip.AddrPortFrom(netip.MustParseAddr(s.Host), uint16(s.Port)), time.Second)
+			res := probeFilteringWith(listen, noHostAddrs, s, netip.AddrPortFrom(netip.MustParseAddr(s.Host), uint16(s.Port)), time.Second)
 			if !errors.Is(res.Err, tc.want) || errors.Is(res.Err, ErrFilteringNotSupported) || errors.Is(res.Err, ErrTest1Failed) {
 				t.Fatalf("Err = %v, want %v alone", res.Err, tc.want)
 			}
@@ -863,6 +866,81 @@ func TestMappingTestAllowed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := mappingTestAllowed(tc.target, tc.other); got != tc.want {
 				t.Errorf("mappingTestAllowed(%v, %v) = %v, want %v", tc.target, tc.other, got, tc.want)
+			}
+		})
+	}
+}
+
+// dropConn counts and drops what is not addressed to target.
+type dropConn struct {
+	net.PacketConn
+	target netip.AddrPort
+	n      *atomic.Int32
+}
+
+func (c dropConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if u, ok := addr.(*net.UDPAddr); ok && u.AddrPort() != c.target {
+		c.n.Add(1)
+		return len(b), nil
+	}
+	return c.PacketConn.WriteTo(b, addr)
+}
+
+// TestProbeFiltering_MappingTestsSkipHostLink: Tests II and III are not sent
+// to an address inside any prefix of this host's interfaces, an IPv6 prefix
+// longer than /64 widened to /64 and an unreadable mask read as the address
+// alone, nor when the interface lookup fails. Where the server is has no
+// effect, and it reports a mapped address unrelated to the host in every row.
+func TestProbeFiltering_MappingTestsSkipHostLink(t *testing.T) {
+	t.Parallel()
+	cidr := func(c string) net.Addr {
+		ip, ipnet, err := net.ParseCIDR(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ipnet.IP = ip // the 16-byte form net.InterfaceAddrs gives for IPv4
+		return ipnet
+	}
+	ifaces := func(addrs ...net.Addr) func() ([]net.Addr, error) {
+		return func() ([]net.Addr, error) { return addrs, nil }
+	}
+	lookupFails := func() ([]net.Addr, error) { return nil, errors.New("no interfaces") }
+	hostOnly := func(mask net.IPMask) net.Addr {
+		return &net.IPNet{IP: net.ParseIP("198.51.100.7"), Mask: mask}
+	}
+	cases := []struct {
+		name, target, other string
+		hostAddrs           func() ([]net.Addr, error)
+		sent                bool
+	}{
+		{"host address", "203.0.113.1:3478", "198.51.100.7:3479", ifaces(cidr("198.51.100.7/24")), false},
+		{"IPv4 /24 neighbour, server on the LAN", "192.168.1.5:3478", "192.168.1.6:3479", ifaces(cidr("192.168.1.2/24")), false},
+		{"IPv6 /64 neighbour", "[2001:db8::1]:3478", "[2001:db8:aaaa:1::8]:22", ifaces(cidr("2001:db8:aaaa:1::7/64")), false},
+		{"/128 host address widened to /64", "[2001:db8::1]:3478", "[2001:db8:aaaa:1::8]:22", ifaces(cidr("2001:db8:aaaa:1::7/128")), false},
+		{"/0 prefix", "203.0.113.1:3478", "203.0.113.11:3479", ifaces(cidr("10.0.0.2/0")), false},
+		{"VPN /16 and LAN /24, other on the LAN", "10.8.0.5:3478", "192.168.1.10:3479", ifaces(cidr("192.168.1.2/24"), cidr("10.8.0.2/16")), false},
+		{"lookup fails", "203.0.113.1:3478", "203.0.113.11:3479", lookupFails, false},
+		{"nil mask on a host address", "203.0.113.1:3478", "198.51.100.7:3479", ifaces(hostOnly(nil)), false},
+		{"16-byte mask on an IPv4 host address", "203.0.113.1:3478", "198.51.100.7:3479", ifaces(hostOnly(net.CIDRMask(120, 128))), false},
+		{"off every prefix", "203.0.113.1:3478", "203.0.113.11:3479", ifaces(cidr("198.51.100.7/24"), cidr("2001:db8:aaaa:1::7/64")), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			target := netip.MustParseAddrPort(tc.target)
+			fake := startReportingResponder(t, netip.MustParseAddr("192.0.2.99"), netip.MustParseAddrPort(tc.other))
+			var elsewhere atomic.Int32
+			listen := func(string, string) (net.PacketConn, error) {
+				c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+				return dropConn{redirectConn{c, target, fake}, target, &elsewhere}, err
+			}
+			server := Server{Host: target.Addr().String(), Port: int(target.Port())}
+			res := probeFilteringWith(listen, tc.hostAddrs, server, target, 300*time.Millisecond)
+			if !res.Test1Other.IsValid() {
+				t.Fatalf("Test1Other = %v, Err = %v; want OTHER-ADDRESS", res.Test1Other, res.Err)
+			}
+			if got := elsewhere.Load() > 0; got != tc.sent {
+				t.Errorf("sends off the target = %d; want sent %v", elsewhere.Load(), tc.sent)
 			}
 		})
 	}
