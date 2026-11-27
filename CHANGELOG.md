@@ -8,6 +8,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 - Hairpinning reads `null` with `hairpin_untested`, not `false`, when `--timeout` ends before its listen does; the listen is capped at two thirds of the time `--timeout` leaves after DNS (#48).
 - Filtering tests resend the same request at 500ms when `--timeout` is above 1s; at the default, a lost packet still reads as filtering when the resend's reply takes more than 250ms (#43).
+- A mapping probe that gets no reply but a packet from the server's address that does not decode as STUN now reads `undecodable reply from <address>` instead of `no response from <address>` (#45).
+- When no probe gets a usable mapping but a server replies to a request, such as with an error response or a success with no mapped address, `direct_p2p` reads `unknown` instead of `unlikely` and `turn_required` reads `false` instead of `true`; the exit code stays 2 (#49).
+- A filtering or hairpinning read that fails for any reason but its deadline no longer counts as no reply: filtering stays untested instead of reading stricter, and hairpinning reads `null` with `hairpin_untested` instead of `false`.
+- A filtering CHANGE-REQUEST that fails to send now warns `filtering_behavior_not_tested` instead of `filtering_skipped_no_change_request`.
 
 ## [0.1.6] — 2026-11-26
 

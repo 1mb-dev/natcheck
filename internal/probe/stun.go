@@ -78,6 +78,11 @@ type transaction struct {
 	raw    []byte
 	start  time.Time             // first send, so RTT includes any retransmission wait
 	reply  chan transactionReply // buffered; the reader must not block on it
+
+	// undecodable holds the first decode error of a packet from source. It
+	// does not end the transaction (a valid reply may still follow,
+	// TestProbe_GarbledThenValidReplySucceeds) and does not set Result.Replied.
+	undecodable error
 }
 
 type transactionReply struct {
@@ -149,8 +154,13 @@ func (r *mappingRun) probeAddrs(ctx context.Context, s Server, ips []netip.Addr)
 	res.Target = tx.target
 
 	reply, err := tx.await(ctx)
+	res.Replied = err == nil
 	switch {
 	case err != nil:
+		if derr := r.undecodable(tx); derr != nil {
+			res.Err = fmt.Errorf("undecodable reply from %s: %w", tx.target, derr)
+			break
+		}
 		// An unconnected socket gets no ICMP errors, so a closed port shows up
 		// here, at the deadline, rather than as an immediate refusal.
 		res.Err = fmt.Errorf("no response from %s: %w", tx.target, err)
@@ -165,14 +175,15 @@ func (r *mappingRun) probeAddrs(ctx context.Context, s Server, ips []netip.Addr)
 }
 
 // await resends the same request, keeping the transaction ID, so a reply to any
-// send completes the transaction.
+// send completes the transaction. A reply already delivered when ctx ends still
+// wins (TestAwait_DeliveredReplyWinsOverDoneContext).
 func (tx *transaction) await(ctx context.Context) (transactionReply, error) {
 	for _, gap := range retransmitGaps {
 		select {
 		case reply := <-tx.reply:
 			return reply, nil
 		case <-ctx.Done():
-			return transactionReply{}, ctx.Err()
+			return tx.afterDone(ctx)
 		case <-time.After(gap):
 			_, _ = tx.conn.WriteTo(tx.raw, net.UDPAddrFromAddrPort(tx.target))
 		}
@@ -181,8 +192,26 @@ func (tx *transaction) await(ctx context.Context) (transactionReply, error) {
 	case reply := <-tx.reply:
 		return reply, nil
 	case <-ctx.Done():
+		return tx.afterDone(ctx)
+	}
+}
+
+// afterDone runs once select has taken ctx.Done. select picks at random among
+// ready cases, so a reply already buffered can lose to ctx.Done there; it is
+// taken here first.
+func (tx *transaction) afterDone(ctx context.Context) (transactionReply, error) {
+	select {
+	case reply := <-tx.reply:
+		return reply, nil
+	default:
 		return transactionReply{}, ctx.Err()
 	}
+}
+
+func (r *mappingRun) undecodable(tx *transaction) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return tx.undecodable
 }
 
 func (r *mappingRun) send(target netip.AddrPort) (*transaction, error) {
@@ -269,7 +298,12 @@ func comparableEndpoint(ap netip.AddrPort) netip.AddrPort {
 // deliver hands a packet to its transaction, or drops it. Order matters: source
 // first, so an unrelated host cannot make us parse its data, then decode, then
 // transaction ID. Nothing here may end the run; only a reply that belongs to a
-// transaction can fail one, and only that one.
+// transaction can fail one, and only that one. A packet that does not decode
+// cannot be matched to a transaction, so it is noted on every transaction
+// awaiting its source and ends none of them
+// (TestProbe_GarbledThenValidReplySucceeds). The note changes only the error
+// message, never Result.Replied: a spoofed source can send it
+// (TestProbe_RepliedWithoutMapping).
 func (r *mappingRun) deliver(data []byte, src netip.AddrPort, received time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -278,6 +312,11 @@ func (r *mappingRun) deliver(data []byte, src netip.AddrPort, received time.Time
 	}
 	resp := &stun.Message{Raw: append([]byte{}, data...)}
 	if err := resp.Decode(); err != nil {
+		for _, tx := range r.pending {
+			if tx.source == src && tx.undecodable == nil {
+				tx.undecodable = err
+			}
+		}
 		return
 	}
 	tx, ok := r.pending[resp.TransactionID]

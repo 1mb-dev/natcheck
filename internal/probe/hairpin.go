@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"os"
 	"time"
 )
 
@@ -15,9 +16,10 @@ import (
 // detection probe. Detected is tri-state:
 //
 //   - nil: probe could not run end-to-end (socket allocation, DNS, or per-socket
-//     STUN probe failed, or ctx ended before the listen window did); Err
-//     describes the underlying cause. Callers should emit WarnHairpinUntested
-//     at the classifier layer.
+//     STUN probe failed, a listen read failed for a reason other than its
+//     deadline (TestRealHairpinRecv_ReadErrorIsNotFalse), or ctx ended before
+//     the listen window did); Err describes the underlying cause. Callers
+//     should emit WarnHairpinUntested at the classifier layer.
 //   - &true: tagged loopback packet arrived on socket B; the NAT supports
 //     hairpinning for the (A→mB) path.
 //   - &false: listen window elapsed with no tagged packet; either no hairpinning
@@ -214,11 +216,14 @@ func realHairpinSend(ctx context.Context, from net.PacketConn, to netip.AddrPort
 
 // realHairpinRecv returns ctx's error, not false, when a read fails with ctx
 // done before the window's end: nothing was measured
-// (TestProbeHairpinning_ContextCutIsUntested). A read that fails after the end
-// reads false even with ctx done (TestRealHairpinRecv_FullWindowReadsFalseAfterCtxEnds).
+// (TestProbeHairpinning_ContextCutIsUntested). A read that hits its deadline
+// after the end reads false even with ctx done
+// (TestRealHairpinRecv_FullWindowReadsFalseAfterCtxEnds). Otherwise a read that
+// fails for any reason but its deadline returns errReadFailed
+// (TestRealHairpinRecv_ReadErrorIsNotFalse).
 func realHairpinRecv(ctx context.Context, on net.PacketConn, tag []byte, timeout time.Duration) (bool, error) {
 	end := time.Now().Add(timeout)
-	buf := make([]byte, 64)
+	buf := make([]byte, 1500)
 	for {
 		if time.Until(end) <= 0 {
 			return false, nil
@@ -228,7 +233,9 @@ func realHairpinRecv(ctx context.Context, on net.PacketConn, tag []byte, timeout
 			if ctxErr := ctx.Err(); ctxErr != nil && time.Now().Before(end) {
 				return false, ctxErr
 			}
-			// Deadline expired or fatal error — treat as timeout, no hairpin.
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				return false, fmt.Errorf("%w: %w", errReadFailed, err)
+			}
 			return false, nil
 		}
 		if bytes.Equal(buf[:n], tag) {

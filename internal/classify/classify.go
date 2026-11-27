@@ -40,7 +40,8 @@ const (
 	AddressPortDependentMapping
 
 	// Blocked: no probe succeeded. Network rejects outbound STUN, all target
-	// servers are unreachable, or the caller's timeout fired too early.
+	// servers are unreachable or answer without a usable mapping (TestClassify),
+	// or the caller's timeout fired too early.
 	Blocked
 )
 
@@ -132,6 +133,9 @@ type Verdict struct {
 	// nothingSent is true for Blocked when no request left the host (every
 	// Target invalid: resolve or send failed), so nothing was measured.
 	nothingSent bool
+	// replied is true for Blocked when a target answered a request without a
+	// usable mapping (probe.Result.Replied; TestClassify).
+	replied bool
 }
 
 // Stable warning vocabulary for the JSON API.
@@ -214,6 +218,7 @@ func classifyMapping(results []probe.Result) Verdict {
 		v.Type = Blocked
 		v.Warnings = append(v.Warnings, WarnAllProbesFailed)
 		v.nothingSent = !slices.ContainsFunc(results, func(r probe.Result) bool { return r.Target.IsValid() })
+		v.replied = slices.ContainsFunc(results, func(r probe.Result) bool { return r.Replied })
 		return v
 	}
 
@@ -411,19 +416,26 @@ func applyFiltering(v *Verdict, f *probe.FilteringResult) {
 // decideForecast computes the WebRTC forecast from a fully-populated Verdict.
 // Precedence (top-down, first match wins):
 //  1. CGNAT detected → unknown (v0.1 honesty rule preserved)
-//  2. Blocked → TURN required; unknown when no request was sent, else unlikely
+//  2. Blocked → unknown when a target replied; else TURN required, and unknown
+//     when no request was sent, unlikely when one was
+//     (TestDecideForecast_Precedence)
 //  3. Mapping ADM/APDM → unlikely
 //  4. Mapping Unknown → unknown
-//  5. Mapping EIM with restrictive filtering (ADF/APDF) → possible
-//  6. Mapping EIM with EIF or untested filtering → likely
+//  5. Mapping EIM with endpoint-independent filtering → likely
+//  6. Mapping EIM with any other or untested filtering → possible
 func decideForecast(v Verdict) Forecast {
 	if v.CGNAT {
 		return Forecast{DirectP2P: "unknown", TURNRequired: false}
 	}
 	switch v.Type {
 	case Blocked:
+		// A reply shows UDP works both ways, so neither the forecast nor a
+		// relay is measured (TestDecideForecast_Precedence/blocked_after_reply).
 		// Nothing sent includes a local firewall refusing UDP, which leaves
-		// only a relay, so TURNRequired holds either way.
+		// only a relay.
+		if v.replied {
+			return Forecast{DirectP2P: "unknown", TURNRequired: false}
+		}
 		p2p := "unlikely"
 		if v.nothingSent {
 			p2p = "unknown"

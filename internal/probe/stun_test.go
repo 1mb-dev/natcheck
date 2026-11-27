@@ -2,8 +2,10 @@ package probe
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -382,6 +384,8 @@ func TestProbe_OtherAddressAbsent(t *testing.T) {
 	}
 }
 
+// TestProbe_GarbledResponse: a packet from the target that does not decode
+// makes the error "undecodable reply", not "no response".
 func TestProbe_GarbledResponse(t *testing.T) {
 	f := newFakeSTUN(t, 0, behaviorGarbled)
 	host, port := f.addr()
@@ -390,7 +394,77 @@ func TestProbe_GarbledResponse(t *testing.T) {
 	defer cancel()
 
 	res := probeOne(ctx, Server{Host: host, Port: port})
-	if res.Err == nil {
-		t.Fatal("expected error on garbled response, got success")
+	want := fmt.Sprintf("undecodable reply from %s:%d: ", host, port)
+	if res.Err == nil || !strings.HasPrefix(res.Err.Error(), want) {
+		t.Fatalf("Err = %v, want prefix %q", res.Err, want)
+	}
+}
+
+func TestProbe_RepliedWithoutMapping(t *testing.T) {
+	cases := []struct {
+		name     string
+		behavior fakeBehavior
+		want     bool
+	}{
+		{"silent", behaviorDrop, false},
+		{"garbled", behaviorGarbled, false},
+		{"error response", behaviorWrongType, true},
+		{"no mapped address", behaviorOmitMapped, true},
+		{"success", behaviorNormal, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			host, port := newFakeSTUN(t, 0, tc.behavior).addr()
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			if res := probeOne(ctx, Server{Host: host, Port: port}); res.Replied != tc.want {
+				t.Errorf("Replied = %v (Err = %v), want %v", res.Replied, res.Err, tc.want)
+			}
+		})
+	}
+}
+
+// TestProbe_GarbledThenValidReplySucceeds: a packet that does not decode is
+// recorded, not final, so a valid reply after it still completes the probe.
+func TestProbe_GarbledThenValidReplySucceeds(t *testing.T) {
+	server, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = server.Close() }()
+
+	go func() {
+		buf := make([]byte, 1500)
+		n, from, err := server.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		req := &stun.Message{Raw: append([]byte{}, buf[:n]...)}
+		if req.Decode() != nil {
+			return
+		}
+		udp := from.(*net.UDPAddr)
+		_, _ = server.WriteTo(buildResponse(behaviorGarbled, req, udp), from)
+		_, _ = server.WriteTo(buildResponse(behaviorNormal, req, udp), from)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	res := probeOne(ctx, Server{Host: "127.0.0.1", Port: server.LocalAddr().(*net.UDPAddr).Port})
+	if res.Err != nil || !res.Mapped.IsValid() {
+		t.Fatalf("Err = %v, Mapped = %v; want success", res.Err, res.Mapped)
+	}
+}
+
+func TestAwait_DeliveredReplyWinsOverDoneContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for i := range 100 {
+		tx := &transaction{reply: make(chan transactionReply, 1)}
+		tx.reply <- transactionReply{rtt: time.Millisecond}
+		if _, err := tx.await(ctx); err != nil {
+			t.Fatalf("run %d: err = %v, want the delivered reply", i, err)
+		}
 	}
 }

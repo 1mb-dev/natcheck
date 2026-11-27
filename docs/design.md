@@ -105,7 +105,8 @@ The JSON schema is a public contract from v0.1 onward; only additive changes aft
 
 ### Failure modes
 
-- All probes fail → exit 2, report per-server errors. Forecast `unlikely` when a request left the host, `unknown` when none did; `turn_required: true` either way
+- All probes fail → exit 2, report per-server errors. Forecast `unknown` with `turn_required: false` when a server replied to a request without a usable mapping (such as an error response, or a success with no mapped address); otherwise `turn_required: true`, with `unlikely` when a request left the host and `unknown` when none did (`TestClassify`)
+- A mapping probe that gets no reply but, before its deadline, a packet from the server's address that does not decode reads `undecodable reply from <address>`, not `no response`; that packet does not set `Replied` or change the forecast (`TestProbe_GarbledResponse`, `TestProbe_GarbledThenValidReplySucceeds`, `TestProbe_RepliedWithoutMapping`)
 - Mapped endpoints disagree across servers → NAT type "Address-Dependent Mapping" (or APDM if we can distinguish; v0.1 reports "ADM or stricter"), exit 1, forecast `unlikely`
 - Mapped IP in `100.64.0.0/10` → warning `cgnat_detected`, forecast `unknown`
 
@@ -171,12 +172,13 @@ type Server struct {
 }
 
 type Result struct {
-    Server Server
-    Target netip.AddrPort  // resolved address, zero if nothing was sent
-    Mapped netip.AddrPort  // zero if probe failed
-    Other  netip.AddrPort  // OTHER-ADDRESS, zero if not advertised
-    RTT    time.Duration   // zero if probe failed
-    Err    error           // nil on success
+    Server  Server
+    Target  netip.AddrPort // resolved address, zero if nothing was sent
+    Mapped  netip.AddrPort // zero if probe failed
+    Other   netip.AddrPort // OTHER-ADDRESS, zero if not advertised
+    RTT     time.Duration  // zero if probe failed
+    Replied bool           // a reply with this request's transaction ID arrived from the target, usable or not (TestProbe_RepliedWithoutMapping)
+    Err     error          // nil on success
 }
 
 type Prober interface {
@@ -377,7 +379,7 @@ Verbose output emits coded warning constants in `warnings[]`:
 | Constant | Condition |
 |---|---|
 | `WarnFilteringSkippedNoChangeRequest` | Server didn't advertise `OTHER-ADDRESS` |
-| `WarnHairpinUntested` | Local socket setup or STUN probe failed, or `--timeout` ran out; hairpinning not measured |
+| `WarnHairpinUntested` | Local socket setup, STUN probe or listen read failed, or `--timeout` ran out; hairpinning not measured |
 
 No free-text warning strings.
 
@@ -397,7 +399,7 @@ Outcome mapping:
 | not received | received | address-dependent |
 | not received | not received | address-and-port-dependent |
 
-Each test waits half the filtering budget (750ms by default). When that window is longer than 500ms, the request is resent at 500ms with the same transaction ID. For Test 2 or 3, silence for the whole window reads as not received (`TestProbeFiltering_ResendsLostChangeRequests`).
+Each test waits half the filtering budget (750ms by default). When that window is longer than 500ms, the request is resent at 500ms with the same transaction ID. For Test 2 or 3, silence for the whole window reads as not received (`TestProbeFiltering_ResendsLostChangeRequests`); a send that fails, or a read that fails for any reason but its deadline, leaves filtering untested (`TestProbeFiltering_LocalFaultIsNotFiltering`).
 
 A Test 2 or Test 3 reply that lacks the change asked for, or an error reply, means the server ignored or rejected `CHANGE-REQUEST`, so neither test measured anything and filtering stays untested. Replies are compared to the target, not `OTHER-ADDRESS`, because provider topologies can reply from an address other than the advertised one.
 
@@ -416,7 +418,7 @@ Result:
 
 - Tagged packet arrives → `hairpinning: true`
 - Timeout → `hairpinning: false`
-- A or B's STUN probe failed, or `--timeout` ended before the listen did → `hairpinning: null` + `WarnHairpinUntested` (`TestRealHairpinRecv_DeadlineCutIsUntested`, `TestProbeHairpinning_ContextCutIsUntested`)
+- A or B's STUN probe failed, a listen read failed for a reason other than its deadline, or `--timeout` ended before the listen did → `hairpinning: null` + `WarnHairpinUntested` (`TestRealHairpinRecv_ReadErrorIsNotFalse`, `TestRealHairpinRecv_DeadlineCutIsUntested`, `TestProbeHairpinning_ContextCutIsUntested`)
 
 Documented limitation: false-negative possible if the NAT applies port-restricted filtering on the hairpin path. Test case in `internal/probe/hairpin_test.go` simulates this scenario via the existing fake-responder pattern.
 
