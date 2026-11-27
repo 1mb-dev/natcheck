@@ -1,7 +1,7 @@
 # natcheck — Architecture
 
-> Status: v0.1.6 shipped.
-> Last updated: 2026-11-27
+> Status: v0.2.0 shipped.
+> Last updated: 2026-11-28
 
 Product framing and technical spec, as shipped. The v0.2 part at the end covers RFC 5780 filtering and mapping tests, hairpinning and the schema they added.
 
@@ -390,7 +390,7 @@ RFC 5780 parity with `pion/stun-nat-behaviour` on protocol rigor while preservin
 | **v0.1.4** | Hairpinning detection via two local sockets, parallel with mapping probes; JSON `hairpinning` field |
 | **v0.1.5** | Mapping measured from one socket per address family (#28), server-diversity guard, filtering source checks, mapping retransmission |
 | **v0.1.6** | Filtering runs against the address the mapping probe reached; hairpinning falls through to the next resolved address; `unknown` forecast when no request left the host |
-| **Unreleased** | RFC 5780 §4.3 mapping tests; warning `no_nat`; both address families probed, verdict from IPv4, JSON `address_families`; timeout, retransmission and reply-handling fixes |
+| **v0.2.0** | RFC 5780 §4.3 mapping tests; warning `no_nat`; both address families probed, verdict from IPv4, JSON `address_families`; timeout, retransmission and reply-handling fixes |
 
 ## JSON schema delta
 
@@ -413,7 +413,7 @@ RFC 5780 parity with `pion/stun-nat-behaviour` on protocol rigor while preservin
   // NEW in v0.1.4
   "hairpinning": true | false | null,
 
-  // NEW, unreleased; probes[] entries also gain "target", the address sent to
+  // NEW in v0.2.0; probes[] entries also gain "target", the address sent to
   "address_families": {
     "ipv4": { "nat_type", "nat_type_legacy", "public_endpoint", "webrtc_forecast", "filtering", "warnings" },
     "ipv6": { ... }

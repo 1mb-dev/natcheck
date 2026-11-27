@@ -176,3 +176,30 @@ The v0.1.5 local Docker lab, unchanged: coturn 4.10.0 on two IPs, a Linux router
 
 - The lab passes IP addresses to `--server`, so it never moves to a second resolved address (#44) or reaches the case where no request leaves the host (#40). Tests in CI cover both.
 - No real-network run, no consumer router, no public-internet coturn run for this release.
+
+## v0.2.0 — 2026-11-28
+
+### Setup
+
+The v0.1.5 local Docker lab with both internal networks made dual-stack (ULA prefixes), `ip6tables` NAT on the router, and a third coturn config that listens on two IPv4 and two IPv6 addresses with RFC 5780 on. Two names, `stun-a` and `stun-b`, each resolve to one IPv4 and one IPv6 coturn address through the clients' hosts files, so the dual-stack runs are the lab's first with a hostname `--server`. coturn 4.19.2 from Alpine 3.24. Plus a real residential dual-stack network. All runs on `954a7dc`, the code tagged `v0.2.0`.
+
+### Verified
+
+| Run | Result | Proves |
+|---|---|---|
+| Lab, RFC 5780 coturn by IP: no NAT, `MASQUERADE`, `SNAT` to a port range, `MASQUERADE --random-fully`, 3 runs each | No NAT: EIM, `likely`, `no_nat`, exit 0. `MASQUERADE` and the SNAT range: EIM, address-and-port-dependent filtering, `possible`, exit 0. `--random-fully`: APDM, `unlikely`, exit 1 | `no_nat` (#39) without NAT, and APDM from Tests II and III (#41) over real NAT |
+| Lab, coturn without RFC 5780: no NAT, `MASQUERADE`, `MASQUERADE --random-fully`, 3 runs each | No NAT: EIM, `no_nat`, `possible`. `MASQUERADE`: EIM, `possible`. `--random-fully`: ADM with `adm_or_stricter`, `unlikely`, exit 1. Filtering untested throughout | Without `OTHER-ADDRESS`, Tests II and III do not run and ADM keeps `adm_or_stricter` |
+| Lab, dual-stack, servers by hostname: IPv4 and IPv6 `MASQUERADE`, then IPv4 `MASQUERADE --random-fully` beside IPv6 `MASQUERADE`, 3 runs each | Both EIM: `possible`, exit 0, an `IPv4:` and an `IPv6:` line. IPv4 APDM beside IPv6 EIM: `unlikely`, exit 1, `address_families_disagree` | Each name is probed in both families and the verdict follows IPv4 (#42), over real NAT in both |
+| Real network, residential dual-stack, default servers | IPv4 ADM, `unlikely`, exit 1; IPv6 EIM with `no_nat`, `possible` | The network whose earlier capture, [`ipv6-native.txt`](samples/ipv6-native.txt), read `possible` while its IPv4 NAT was symmetric ([`ipv4-symmetric.txt`](samples/ipv4-symmetric.txt)) now reads IPv4's verdict |
+
+### Not proven
+
+- The lab client beside the servers has the servers' alternate address on its own link, so by the rule in [`docs/design.md` § Mapping tests](design.md#mapping-tests-rfc-5780-43) it skips Tests II and III. Its verdict matches the other no-NAT runs; the skip itself does not show in the output.
+- Every lab address binds and sends, so the lab never moves to a second resolved address (#44) or reaches the case where no request leaves the host (#40). Tests in CI cover both.
+- The lab's IPv6 runs through NAT66 on ULA prefixes. The silent-family wait in [`docs/design.md` § Concurrency model](design.md#concurrency-model) was not run.
+- The lab has no consumer router, and the residential network's gateway was not identified.
+- No public-internet coturn run for this release.
+
+### Reference output
+
+[`docs/samples/dual-stack.txt`](samples/dual-stack.txt), with a `.json` pair.
