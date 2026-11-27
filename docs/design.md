@@ -105,7 +105,8 @@ The JSON schema is a public contract from v0.1 onward; only additive changes aft
 
 ### Failure modes
 
-- All probes fail → exit 2, report per-server errors. Forecast `unlikely` when a request left the host, `unknown` when none did; `turn_required: true` either way
+- All probes fail → exit 2, report per-server errors. Forecast `unknown` with `turn_required: false` when a server replied to a request without a usable mapping (such as an error response, or a success with no mapped address); otherwise `turn_required: true`, with `unlikely` when a request left the host and `unknown` when none did (`TestClassify`)
+- A mapping probe that gets no reply but, before its deadline, a packet from the server's address that does not decode reads `undecodable reply from <address>`, not `no response`; that packet does not set `Replied` or change the forecast (`TestProbe_GarbledResponse`, `TestProbe_GarbledThenValidReplySucceeds`, `TestProbe_RepliedWithoutMapping`)
 - Mapped endpoints disagree across servers → NAT type "Address-Dependent Mapping" (or APDM if we can distinguish; v0.1 reports "ADM or stricter"), exit 1, forecast `unlikely`
 - Mapped IP in `100.64.0.0/10` → warning `cgnat_detected`, forecast `unknown`
 
@@ -171,12 +172,13 @@ type Server struct {
 }
 
 type Result struct {
-    Server Server
-    Target netip.AddrPort  // resolved address, zero if nothing was sent
-    Mapped netip.AddrPort  // zero if probe failed
-    Other  netip.AddrPort  // OTHER-ADDRESS, zero if not advertised
-    RTT    time.Duration   // zero if probe failed
-    Err    error           // nil on success
+    Server  Server
+    Target  netip.AddrPort // resolved address, zero if nothing was sent
+    Mapped  netip.AddrPort // zero if probe failed
+    Other   netip.AddrPort // OTHER-ADDRESS, zero if not advertised
+    RTT     time.Duration  // zero if probe failed
+    Replied bool           // a reply with this request's transaction ID arrived from the target, usable or not (TestProbe_RepliedWithoutMapping)
+    Err     error          // nil on success
 }
 
 type Prober interface {

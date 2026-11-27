@@ -31,13 +31,20 @@ func ok(host string, port int, mapped string, rtt time.Duration) probe.Result {
 	}
 }
 
-// fail is a request that was sent and got no usable reply.
+// fail is a request that was sent and got no reply.
 func fail(host string, port int) probe.Result {
 	return probe.Result{
 		Server: probe.Server{Host: host, Port: port},
 		Target: targetFor(host, port),
 		Err:    errProbe,
 	}
+}
+
+// replied is a request that got a reply with no usable mapping.
+func replied(host string, port int) probe.Result {
+	r := fail(host, port)
+	r.Replied = true
+	return r
 }
 
 // unsent is a request that never left the host: resolve or send failed.
@@ -101,6 +108,28 @@ func TestClassify(t *testing.T) {
 			wantType:     Blocked,
 			wantP2P:      "unlikely",
 			wantTURN:     true,
+			wantWarnings: []string{WarnAllProbesFailed},
+		},
+		{
+			name: "0/2 replied without a mapping — Blocked, unknown",
+			results: []probe.Result{
+				replied("google", 19302),
+				replied("cloudflare", 3478),
+			},
+			wantType:     Blocked,
+			wantP2P:      "unknown",
+			wantTURN:     false,
+			wantWarnings: []string{WarnAllProbesFailed},
+		},
+		{
+			name: "0/2 one replied, one silent — Blocked, unknown",
+			results: []probe.Result{
+				fail("google", 19302),
+				replied("cloudflare", 3478),
+			},
+			wantType:     Blocked,
+			wantP2P:      "unknown",
+			wantTURN:     false,
 			wantWarnings: []string{WarnAllProbesFailed},
 		},
 		{
@@ -646,6 +675,7 @@ func TestDecideForecast_Precedence(t *testing.T) {
 		{"cgnat_overrides_eim_adf", Verdict{Type: EndpointIndependentMapping, CGNAT: true, Filtering: FilteringAddressDependent}, Forecast{DirectP2P: "unknown"}},
 		{"blocked_no_cgnat", Verdict{Type: Blocked}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
 		{"blocked_nothing_sent", Verdict{Type: Blocked, nothingSent: true}, Forecast{DirectP2P: "unknown", TURNRequired: true}},
+		{"blocked_after_reply", Verdict{Type: Blocked, replied: true}, Forecast{DirectP2P: "unknown", TURNRequired: false}},
 		{"adm", Verdict{Type: AddressDependentMapping}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
 		{"apdm", Verdict{Type: AddressPortDependentMapping}, Forecast{DirectP2P: "unlikely", TURNRequired: true}},
 		{"unknown_mapping", Verdict{Type: Unknown}, Forecast{DirectP2P: "unknown"}},

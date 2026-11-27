@@ -24,13 +24,19 @@ type Server struct {
 // advertised one. Zero-value (Other.IsValid() == false) means the server's
 // response did not include OTHER-ADDRESS, so it does not support the §4.4
 // filtering classification sequence.
+//
+// Replied is true when a reply carrying this request's transaction ID arrived
+// from the target, even an error response or one without a mapped address; Err
+// may still be set. A packet that does not decode cannot be tied to the request
+// and leaves Replied false (TestProbe_RepliedWithoutMapping).
 type Result struct {
-	Server Server
-	Target netip.AddrPort
-	Mapped netip.AddrPort
-	Other  netip.AddrPort
-	RTT    time.Duration
-	Err    error
+	Server  Server
+	Target  netip.AddrPort
+	Mapped  netip.AddrPort
+	Other   netip.AddrPort
+	RTT     time.Duration
+	Replied bool
+	Err     error
 }
 
 // Prober probes every server in one run and returns one Result per server, in
