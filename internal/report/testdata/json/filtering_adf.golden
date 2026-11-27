@@ -27,5 +27,21 @@
     "behavior": "address-dependent",
     "tested_against": "stun.example.org:3478"
   },
-  "hairpinning": null
+  "hairpinning": null,
+  "address_families": {
+    "ipv4": {
+      "nat_type": "EIM",
+      "nat_type_legacy": "cone",
+      "public_endpoint": "203.0.113.45:51820",
+      "webrtc_forecast": {
+        "direct_p2p": "possible",
+        "turn_required": false
+      },
+      "filtering": {
+        "behavior": "address-dependent",
+        "tested_against": "stun.example.org:3478"
+      },
+      "warnings": []
+    }
+  }
 }

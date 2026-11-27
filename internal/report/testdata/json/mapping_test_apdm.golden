@@ -27,5 +27,21 @@
     "behavior": "address-and-port-dependent",
     "tested_against": "stun.example.org:3478"
   },
-  "hairpinning": null
+  "hairpinning": null,
+  "address_families": {
+    "ipv4": {
+      "nat_type": "APDM",
+      "nat_type_legacy": "symmetric",
+      "public_endpoint": "203.0.113.45:51820",
+      "webrtc_forecast": {
+        "direct_p2p": "unlikely",
+        "turn_required": true
+      },
+      "filtering": {
+        "behavior": "address-and-port-dependent",
+        "tested_against": "stun.example.org:3478"
+      },
+      "warnings": []
+    }
+  }
 }

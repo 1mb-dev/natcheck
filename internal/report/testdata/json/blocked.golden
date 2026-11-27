@@ -26,5 +26,6 @@
   "filtering": {
     "behavior": "untested"
   },
-  "hairpinning": null
+  "hairpinning": null,
+  "address_families": {}
 }

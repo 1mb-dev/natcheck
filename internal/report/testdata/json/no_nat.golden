@@ -28,5 +28,23 @@
   "filtering": {
     "behavior": "untested"
   },
-  "hairpinning": null
+  "hairpinning": null,
+  "address_families": {
+    "ipv4": {
+      "nat_type": "EIM",
+      "nat_type_legacy": "cone",
+      "public_endpoint": "203.0.113.45:51820",
+      "webrtc_forecast": {
+        "direct_p2p": "possible",
+        "turn_required": false
+      },
+      "filtering": {
+        "behavior": "untested"
+      },
+      "warnings": [
+        "filtering_behavior_not_tested",
+        "no_nat"
+      ]
+    }
+  }
 }

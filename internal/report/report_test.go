@@ -296,6 +296,36 @@ func fixtureIPv4Stricter() (classify.Verdict, []probe.Result, *probe.FilteringRe
 	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
+// fixtureIPv4Silent: IPv4 requests left and nothing came back while IPv6
+// answered; the silent IPv4 family is Blocked and decides.
+func fixtureIPv4Silent() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
+			Err:    errors.New("no response from 192.0.2.10:19302: context deadline exceeded"),
+		},
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("[2001:db8:c::1]:19302"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    42 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
+			Err:    errors.New("no response from 192.0.2.20:3478: context deadline exceeded"),
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("[2001:db8:d::1]:3478"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    47 * time.Millisecond,
+		},
+	}
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
+}
+
 // fixtureMixedV4V6Disagree: IPv4 agrees on EIM, IPv6 maps differently (ADM).
 // IPv4 decides; address_families_disagree names both forecasts.
 func fixtureMixedV4V6Disagree() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -450,6 +480,7 @@ func TestRender_Golden(t *testing.T) {
 		{"filtering_apdf", fixtureFilteringAPDF},
 		{"mixed_v4v6_disagree", fixtureMixedV4V6Disagree},
 		{"ipv4_stricter", fixtureIPv4Stricter},
+		{"ipv4_silent", fixtureIPv4Silent},
 		{"insufficient_probes", fixtureInsufficientProbes},
 		{"hairpinning_detected", fixtureHairpinningDetected},
 		{"hairpinning_not_detected", fixtureHairpinningNotDetected},
@@ -505,7 +536,7 @@ func TestRender_HidesUnsentFamily(t *testing.T) {
 		{Server: a, Err: errors.New("write a: network is unreachable")},
 		{Server: b, Err: errors.New("write b: network is unreachable")},
 	}
-	v := classify.Verdict{Type: classify.Unknown, Forecast: classify.Forecast{DirectP2P: "unknown"}}
+	v := classify.Classify(probes, classify.Filtering{}, nil)
 
 	human := renderToBytes(t, v, probes, nil, FormatHuman)
 	if bytes.Contains(human, []byte("write a")) || !bytes.Contains(human, []byte("write b")) {
@@ -514,5 +545,29 @@ func TestRender_HidesUnsentFamily(t *testing.T) {
 	j := renderToBytes(t, v, probes, nil, FormatJSON)
 	if !bytes.Contains(j, []byte("write a")) || !bytes.Contains(j, []byte("write b")) {
 		t.Errorf("JSON must keep every row:\n%s", j)
+	}
+
+	ipv6Only := []probe.Result{
+		{Server: a, Err: errors.New("write a: network is unreachable")},
+		{Server: a, Target: netip.MustParseAddrPort("[2001:db8:a::1]:3478"), Mapped: netip.MustParseAddrPort("[2001:db8::1]:40000"), RTT: 10 * time.Millisecond},
+		{Server: b, Err: errors.New("write b: network is unreachable")},
+		{Server: b, Target: netip.MustParseAddrPort("[2001:db8:b::1]:3478"), Mapped: netip.MustParseAddrPort("[2001:db8::1]:40000"), RTT: 10 * time.Millisecond},
+	}
+	v = classify.Classify(ipv6Only, classify.Filtering{}, nil)
+	human = renderToBytes(t, v, ipv6Only, nil, FormatHuman)
+	if !bytes.Contains(human, []byte("write a")) || !bytes.Contains(human, []byte("write b")) {
+		t.Errorf("under ipv4_untested, human output must keep the rows that show why:\n%s", human)
+	}
+
+	ipv6Silent := []probe.Result{
+		{Server: a, Err: errors.New("write a: network is unreachable")},
+		{Server: a, Target: netip.MustParseAddrPort("[2001:db8:a::1]:3478"), Err: errors.New("no response")},
+		{Server: b, Err: errors.New("write b: network is unreachable")},
+		{Server: b, Target: netip.MustParseAddrPort("[2001:db8:b::1]:3478"), Err: errors.New("no response")},
+	}
+	v = classify.Classify(ipv6Silent, classify.Filtering{}, nil)
+	human = renderToBytes(t, v, ipv6Silent, nil, FormatHuman)
+	if v.Type != classify.Blocked || !bytes.Contains(human, []byte("write a")) || !bytes.Contains(human, []byte("write b")) {
+		t.Errorf("when every probe failed, human output must keep every row:\n%s", human)
 	}
 }

@@ -39,10 +39,9 @@ func warningText(id string, v classify.Verdict) string {
 	case classify.WarnAllProbesFailed:
 		return "All probes failed."
 	case classify.WarnInsufficientProbes:
-		// Fires whenever any per-family group has fewer than two probes.
-		// Under v0.1.3 combine semantics this can co-occur with a confident
-		// combined verdict (when the other family had two probes that agreed);
-		// the text must not imply the verdict itself is unknown.
+		// Can sit beside a confident verdict from the other family
+		// (TestClassify_AddressFamilies), so the text must not imply the
+		// verdict is unknown.
 		return "Insufficient probes for one or more address families."
 	case classify.WarnAddressFamiliesDisagree:
 		return fmt.Sprintf("IPv4 reads %s and IPv6 reads %s. The verdict follows IPv4: a peer without IPv6 depends on it, and natcheck does not test the peer.",
@@ -54,7 +53,7 @@ func warningText(id string, v classify.Verdict) string {
 	case classify.WarnNoNAT:
 		return "No NAT on the probed path: the mapped endpoint is this host's own address and port. A firewall may still filter."
 	case classify.WarnInsufficientServerDiversity:
-		return "Servers share one IP, which cannot show mapping behavior. Use --server values on two different IPs."
+		return "Servers share one IP in one or more address families, which cannot show mapping behavior. Use --server values on two different IPs."
 	default:
 		return id
 	}
@@ -62,8 +61,9 @@ func warningText(id string, v classify.Verdict) string {
 
 // unsentBesideSent reports whether p's request never left the host while the
 // same server's request in another address family did. The JSON report keeps
-// such rows; here they would print on every healthy single-family run
-// (TestRender_HidesUnsentFamily).
+// such rows; here they would print on every healthy single-family run. Without
+// an IPv4 family (ipv4_untested, or every probe failed) they print, as the
+// diagnosis (TestRender_HidesUnsentFamily).
 func unsentBesideSent(p probe.Result, probes []probe.Result) bool {
 	return !p.Target.IsValid() && slices.ContainsFunc(probes, func(q probe.Result) bool {
 		return q.Server == p.Server && q.Target.IsValid()
@@ -93,8 +93,25 @@ func renderHuman(w io.Writer, v classify.Verdict, probes []probe.Result) error {
 	if v.Hairpinning != nil {
 		fmt.Fprintf(&b, "Hairpinning: %t\n", *v.Hairpinning)
 	}
+	if v.IPv4 != nil && v.IPv6 != nil {
+		for _, f := range []struct {
+			name string
+			v    *classify.Verdict
+		}{{"IPv4", v.IPv4}, {"IPv6", v.IPv6}} {
+			line := fmt.Sprintf("%s: %s, direct P2P %s", f.name, natTypeHuman(*f.v), f.v.Forecast.DirectP2P)
+			if f.v.CGNAT {
+				line += ", mapped into 100.64.0.0/10"
+			}
+			if slices.Contains(f.v.Warnings, classify.WarnNoNAT) {
+				line += ", no NAT"
+			}
+			fmt.Fprintln(&b, line)
+		}
+	}
 
-	probes = slices.DeleteFunc(slices.Clone(probes), func(p probe.Result) bool { return unsentBesideSent(p, probes) })
+	if v.IPv4 != nil {
+		probes = slices.DeleteFunc(slices.Clone(probes), func(p probe.Result) bool { return unsentBesideSent(p, probes) })
+	}
 	if len(probes) > 0 {
 		srvs := make([]string, len(probes))
 		rtts := make([]string, len(probes))

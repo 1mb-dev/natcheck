@@ -1,0 +1,14 @@
+Direct P2P: unlikely
+NAT type: Blocked
+IPv4: Blocked, direct P2P unlikely
+IPv6: Endpoint-Independent Mapping (cone), direct P2P possible
+
+Probes:
+  stun.l.google.com:19302 (192.0.2.10)      error=no response from 192.0.2.10:19302: context deadline exceeded
+  stun.l.google.com:19302 (2001:db8:c::1)   rtt=42ms  mapped=[2001:db8::1]:51820
+  stun.cloudflare.com:3478 (192.0.2.20)     error=no response from 192.0.2.20:3478: context deadline exceeded
+  stun.cloudflare.com:3478 (2001:db8:d::1)  rtt=47ms  mapped=[2001:db8::1]:51820
+
+Filtering not tested.
+IPv4 reads unlikely and IPv6 reads possible. The verdict follows IPv4: a peer without IPv6 depends on it, and natcheck does not test the peer.
+Hairpinning not tested (local socket setup, STUN probe or listen read failed, the server reported a mapped address natcheck does not send to, or --timeout ran out).

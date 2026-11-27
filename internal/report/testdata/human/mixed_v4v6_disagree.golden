@@ -1,6 +1,8 @@
 Direct P2P: possible
 NAT type: Endpoint-Independent Mapping (cone)
 Public endpoint: 203.0.113.45:51820
+IPv4: Endpoint-Independent Mapping (cone), direct P2P possible
+IPv6: Address-Dependent Mapping (symmetric), direct P2P unlikely
 
 Probes:
   stun.l.google.com:19302 (192.0.2.10)       rtt=24ms  mapped=203.0.113.45:51820
