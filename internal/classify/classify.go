@@ -40,7 +40,9 @@ const (
 
 	// Blocked: no probe succeeded. Network rejects outbound STUN, all target
 	// servers are unreachable or answer without a usable mapping (TestClassify),
-	// or the caller's timeout fired too early.
+	// or the caller's timeout fired too early. An IPv4 family whose requests
+	// left without a mapping is Blocked beside a successful IPv6 family
+	// (TestClassify_AddressFamilies).
 	Blocked
 )
 
@@ -129,6 +131,10 @@ type Verdict struct {
 	Warnings    []string
 	Forecast    Forecast
 
+	// IPv4 and IPv6 are the per-family verdicts the top level is taken from;
+	// nil for an absent family and on the verdict of a family itself.
+	IPv4, IPv6 *Verdict
+
 	// nothingSent is true for Blocked when no request left the host (every
 	// Target invalid: resolve or send failed), so nothing was measured.
 	nothingSent bool
@@ -145,7 +151,7 @@ const (
 	WarnInsufficientProbes              = "insufficient_probes"
 	WarnFilteringBehaviorNotTested      = "filtering_behavior_not_tested"
 	WarnFilteringSkippedNoChangeRequest = "filtering_skipped_no_change_request"
-	WarnMixedAddressFamilyProbes        = "mixed_address_family_probes"
+	WarnAddressFamiliesDisagree         = "address_families_disagree"
 	WarnHairpinUntested                 = "hairpin_untested"
 	WarnInsufficientServerDiversity     = "insufficient_server_diversity"
 	WarnIPv4Untested                    = "ipv4_untested"
@@ -155,6 +161,13 @@ const (
 // cgnatPrefix is RFC 6598 shared address space.
 var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
+// Filtering holds the RFC 5780 §4.4 result run in each address family, nil
+// where none ran, each against a server among that family's Compared probes
+// (TestRun_FilteringUsesComparedRows).
+type Filtering struct {
+	IPv4, IPv6 *probe.FilteringResult
+}
+
 // Classify turns probe results into a Verdict. Pure function: no I/O, no
 // goroutines, deterministic for a given input.
 //
@@ -162,24 +175,69 @@ var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
 // Mapped.IsValid(). This guards against buggy Prober implementations that
 // might report nil-error with a zero mapped endpoint.
 //
-// filtering may be nil; in that case Verdict.Filtering stays Untested and
-// the existing WarnFilteringBehaviorNotTested warning is emitted. When
-// filtering is non-nil, its Test2/Test3 booleans drive the FilteringBehavior
-// and the WebRTC forecast for EIM mappings (RFC 5780 §4.4 outcomes).
+// Successes are grouped by mapped address family and each family is
+// classified on its own, with its own filtering result. The top level is
+// IPv4's, or IPv6's when IPv4 is absent (docs/design.md § Address families,
+// TestClassify_AddressFamilies).
 //
 // hairpinning may be nil; in that case Verdict.Hairpinning stays nil and
 // WarnHairpinUntested is emitted. When hairpinning is non-nil, the value is
-// carried through to Verdict.Hairpinning unchanged. v0.1.4 does NOT shift
-// the forecast based on this value — hairpinning only matters for same-NAT
-// (LAN) peers, which is not the natcheck user's question. See the Verdict
-// field doc and docs/design.md.
-func Classify(results []probe.Result, filtering *probe.FilteringResult, hairpinning *probe.HairpinningResult) Verdict {
-	v := classifyMapping(results)
-	applyFiltering(&v, filtering)
-	applyMappingTest(&v, results, filtering)
+// carried through to Verdict.Hairpinning unchanged. It does not shift the
+// forecast: hairpinning only matters for same-NAT (LAN) peers, which is not
+// the natcheck user's question. See the Verdict field doc and docs/design.md.
+func Classify(results []probe.Result, filtering Filtering, hairpinning *probe.HairpinningResult) Verdict {
+	v4, v6 := Compared(results, true), Compared(results, false)
+	var sent4, replied4 bool
+	for _, r := range results {
+		if (r.Err != nil || !r.Mapped.IsValid()) && r.Target.IsValid() && r.Target.Addr().Is4() {
+			sent4 = true
+			replied4 = replied4 || r.Replied
+		}
+	}
+
+	var v Verdict
+	if len(v4) == 0 && len(v6) == 0 {
+		v = Verdict{Type: Blocked, Warnings: []string{WarnFilteringBehaviorNotTested, WarnAllProbesFailed}}
+		v.nothingSent = !slices.ContainsFunc(results, func(r probe.Result) bool { return r.Target.IsValid() })
+		v.replied = slices.ContainsFunc(results, func(r probe.Result) bool { return r.Replied })
+		v.Forecast = decideForecast(v)
+	} else {
+		var f4, f6 *Verdict
+		switch {
+		case len(v4) > 0:
+			f4 = classifyFamily(v4, filtering.IPv4)
+		case sent4:
+			// A silent IPv6 family stays absent (TestClassify_AddressFamilies).
+			f4 = &Verdict{Type: Blocked, Warnings: []string{WarnFilteringBehaviorNotTested, WarnAllProbesFailed}, replied: replied4}
+			f4.Forecast = decideForecast(*f4)
+		}
+		if len(v6) > 0 {
+			f6 = classifyFamily(v6, filtering.IPv6)
+		}
+		v = combineFamilies(f4, f6)
+	}
 	applyHairpinning(&v, hairpinning)
-	v.Forecast = decideForecast(v)
 	return v
+}
+
+// Compared returns the successful probes whose mappings are compared for one
+// address family: those mapped into it, less any sent from the other family's
+// socket, such as DNS64 rows beside a CLAT's IPv4 rows, when one from the
+// family's own socket got a mapping. Mappings from two sockets are not
+// comparable (TestClassify_AddressFamilies). A row without a Target counts as
+// the family's own, so it still fails closed (TestClassify_ServerDiversity).
+func Compared(results []probe.Result, is4 bool) []probe.Result {
+	var group []probe.Result
+	for _, r := range results {
+		if r.Err == nil && r.Mapped.IsValid() && r.Mapped.Addr().Is4() == is4 {
+			group = append(group, r)
+		}
+	}
+	translated := func(r probe.Result) bool { return r.Target.IsValid() && r.Target.Addr().Is4() != is4 }
+	if slices.ContainsFunc(group, func(r probe.Result) bool { return !translated(r) }) {
+		group = slices.DeleteFunc(group, translated)
+	}
+	return group
 }
 
 // applyHairpinning folds the hairpin probe outcome into the verdict. When
@@ -194,130 +252,68 @@ func applyHairpinning(v *Verdict, hairpinning *probe.HairpinningResult) {
 	v.Hairpinning = &d
 }
 
-// classifyMapping derives mapping behavior, public endpoint, CGNAT, and the
-// initial warning set. Forecast is computed by decideForecast after filtering
-// data is folded in.
-//
-// Address-family handling: probes are grouped by Mapped.Addr().Is4() and
-// classified per-group, then combined. Each family observes its own NAT
-// (the v4 NAT and v6 router are independent), so cross-family equality
-// comparison would always disagree by construction. The combine rule treats
-// Unknown as absence of information, not disagreement: a confident verdict
-// from one family wins over Unknown from the other; two confident verdicts
-// must match or the combined verdict is Unknown.
-func classifyMapping(results []probe.Result) Verdict {
-	v := Verdict{Warnings: []string{WarnFilteringBehaviorNotTested}}
-
-	var successes []probe.Result
-	for _, r := range results {
-		if r.Err == nil && r.Mapped.IsValid() {
-			successes = append(successes, r)
-		}
-	}
-
-	if len(successes) == 0 {
-		v.Type = Blocked
-		v.Warnings = append(v.Warnings, WarnAllProbesFailed)
-		v.nothingSent = !slices.ContainsFunc(results, func(r probe.Result) bool { return r.Target.IsValid() })
-		v.replied = slices.ContainsFunc(results, func(r probe.Result) bool { return r.Replied })
-		return v
-	}
-
-	var v4, v6 []probe.Result
-	for _, r := range successes {
-		if r.Mapped.Addr().Is4() {
-			v4 = append(v4, r)
-		} else {
-			v6 = append(v6, r)
-		}
-	}
-	multiFamily := len(v4) > 0 && len(v6) > 0
-
-	var v4g, v6g *Verdict
-	if len(v4) > 0 {
-		g := classifyGroup(v4)
-		v4g = &g
-	}
-	if len(v6) > 0 {
-		g := classifyGroup(v6)
-		v6g = &g
-	}
-
-	combined := combineGroups(v4g, v6g)
-	v.Type = combined.Type
-	v.LegacyName = combined.LegacyName
-	v.PublicEndpoint = successes[0].Mapped // top-level endpoint = first success, regardless of family
-	v.CGNAT = combined.CGNAT
-
-	// Warning propagation:
-	//   - WarnInsufficientProbes / WarnCGNATDetected propagate independently
-	//     from any group (they describe facts true of that group).
-	//   - WarnADMOrStricter propagates only when the COMBINED verdict is ADM
-	//     (suppressed under disagreement-Unknown — premise no longer holds).
-	//   - WarnMixedAddressFamilyProbes fires whenever both families are present.
-	if multiFamily {
-		v.Warnings = appendUnique(v.Warnings, WarnMixedAddressFamilyProbes)
-	}
-	// A hostname is probed on one family, and DNS prefers IPv6, so an IPv6
-	// verdict can sit in front of a symmetric IPv4 NAT with nothing in the
-	// output to say so.
-	if len(v4) == 0 {
-		v.Warnings = appendUnique(v.Warnings, WarnIPv4Untested)
-	}
-	for _, g := range []*Verdict{v4g, v6g} {
-		if g == nil {
-			continue
-		}
-		for _, w := range g.Warnings {
-			if w == WarnADMOrStricter && v.Type != AddressDependentMapping {
-				continue
-			}
-			v.Warnings = appendUnique(v.Warnings, w)
-		}
-	}
+// classifyFamily classifies one address family's successful probes and folds
+// in the filtering result run in that family.
+func classifyFamily(group []probe.Result, f *probe.FilteringResult) *Verdict {
+	v := classifyGroup(group)
+	v.Warnings = append([]string{WarnFilteringBehaviorNotTested}, v.Warnings...)
+	applyFiltering(&v, f)
+	applyMappingTest(&v, f)
 	// One probe is enough. The forecast stays the mapping's (TestClassify_NoNAT).
-	if !slices.ContainsFunc(successes, func(r probe.Result) bool { return !r.Untranslated }) {
+	if !slices.ContainsFunc(group, func(r probe.Result) bool { return !r.Untranslated }) {
 		v.Warnings = append(v.Warnings, WarnNoNAT)
 	}
-
-	return v
+	v.Forecast = decideForecast(v)
+	return &v
 }
 
-// combineGroups reconciles per-family verdicts. "Unknown is absence of
-// information, not disagreement" — a confident verdict beats Unknown; two
-// confident verdicts must match or the combined verdict is Unknown.
-//
-// CGNAT is OR'd across groups (the fact applies if true for any family;
-// decideForecast's CGNAT precedence handles the forecast accordingly).
-func combineGroups(v4g, v6g *Verdict) Verdict {
-	switch {
-	case v4g != nil && v6g != nil:
-		// Both families present.
-		out := Verdict{CGNAT: v4g.CGNAT || v6g.CGNAT}
-		switch {
-		case v4g.Type == Unknown && v6g.Type == Unknown:
-			out.Type = Unknown
-		case v4g.Type == Unknown:
-			out.Type = v6g.Type
-			out.LegacyName = v6g.LegacyName
-		case v6g.Type == Unknown:
-			out.Type = v4g.Type
-			out.LegacyName = v4g.LegacyName
-		case v4g.Type == v6g.Type:
-			out.Type = v4g.Type
-			out.LegacyName = v4g.LegacyName
-		default:
-			out.Type = Unknown
-		}
-		return out
-	case v4g != nil:
-		return *v4g
-	case v6g != nil:
-		return *v6g
-	default:
-		// Unreachable: caller ensures at least one group is non-nil.
-		return Verdict{Type: Unknown}
+// combineFamilies takes the top level from IPv4, or from IPv6 when IPv4 is
+// absent (TestClassify_AddressFamilies).
+func combineFamilies(f4, f6 *Verdict) Verdict {
+	d := f4
+	if d == nil {
+		d = f6
 	}
+	v := Verdict{
+		Type:                   d.Type,
+		LegacyName:             d.LegacyName,
+		PublicEndpoint:         d.PublicEndpoint,
+		CGNAT:                  d.CGNAT,
+		Filtering:              d.Filtering,
+		FilteringTestedAgainst: d.FilteringTestedAgainst,
+		Forecast:               d.Forecast,
+		IPv4:                   f4,
+		IPv6:                   f6,
+	}
+	for _, w := range d.Warnings {
+		if w == WarnFilteringBehaviorNotTested || w == WarnFilteringSkippedNoChangeRequest {
+			v.Warnings = append(v.Warnings, w)
+		}
+	}
+	if f4 == nil {
+		v.Warnings = append(v.Warnings, WarnIPv4Untested)
+	}
+	if f4 != nil && f6 != nil && f4.Forecast.DirectP2P != f6.Forecast.DirectP2P {
+		v.Warnings = append(v.Warnings, WarnAddressFamiliesDisagree)
+	}
+	noNAT := true
+	for _, f := range []*Verdict{f4, f6} {
+		if f == nil {
+			continue
+		}
+		noNAT = noNAT && slices.Contains(f.Warnings, WarnNoNAT)
+		for _, w := range f.Warnings {
+			switch {
+			case w == WarnInsufficientProbes, w == WarnInsufficientServerDiversity, w == WarnCGNATDetected,
+				w == WarnADMOrStricter && f == d:
+				v.Warnings = appendUnique(v.Warnings, w)
+			}
+		}
+	}
+	if noNAT {
+		v.Warnings = append(v.Warnings, WarnNoNAT)
+	}
+	return v
 }
 
 // appendUnique appends w to ws only if not already present. Preserves order.
@@ -332,8 +328,8 @@ func appendUnique(ws []string, w string) []string {
 
 // classifyGroup runs the case-1/case-many mapping classification for a
 // non-empty set of successful probes. CGNAT detection is applied.
-// Warnings returned do NOT include WarnFilteringBehaviorNotTested — that's
-// the caller's concern at the combined-verdict level.
+// Warnings returned do NOT include WarnFilteringBehaviorNotTested;
+// classifyFamily adds it.
 func classifyGroup(group []probe.Result) Verdict {
 	v := Verdict{}
 	switch len(group) {
@@ -422,25 +418,9 @@ func applyFiltering(v *Verdict, f *probe.FilteringResult) {
 // which differ only in destination port: different mappings make it APDM, equal
 // ones leave ADM; either way adm_or_stricter drops. As in RFC 5780, they apply
 // only when Test II's mapping differs from Test I's. They never produce EIM and
-// never replace Unknown (TestClassify_MappingTest). Verdicts combine families,
-// so they apply only when the other family's probes alone classify Unknown.
-func applyMappingTest(v *Verdict, results []probe.Result, f *probe.FilteringResult) {
+// never replace Unknown (TestClassify_MappingTest).
+func applyMappingTest(v *Verdict, f *probe.FilteringResult) {
 	if f == nil || !f.AltIPMapped.IsValid() || !f.AltEndpointMapped.IsValid() || f.AltIPMapped == f.Test1Mapped || v.Type != AddressDependentMapping {
-		return
-	}
-	is4 := f.Test1Mapped.Addr().Is4()
-	var tested, rest []probe.Result
-	for _, r := range results {
-		if r.Err != nil || !r.Mapped.IsValid() {
-			continue
-		}
-		if r.Mapped.Addr().Is4() == is4 {
-			tested = append(tested, r)
-		} else {
-			rest = append(rest, r)
-		}
-	}
-	if len(tested) == 0 || (len(rest) > 0 && classifyGroup(rest).Type != Unknown) {
 		return
 	}
 	if f.AltIPMapped != f.AltEndpointMapped {

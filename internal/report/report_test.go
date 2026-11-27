@@ -36,7 +36,7 @@ func fixtureEIMCone() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureInsufficientServerDiversity() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -54,7 +54,7 @@ func fixtureInsufficientServerDiversity() (classify.Verdict, []probe.Result, *pr
 			RTT:    25 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureIPv4Untested() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -72,7 +72,7 @@ func fixtureIPv4Untested() (classify.Verdict, []probe.Result, *probe.FilteringRe
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureADMStrict() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -88,7 +88,7 @@ func fixtureADMStrict() (classify.Verdict, []probe.Result, *probe.FilteringResul
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureBlocked() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -104,7 +104,7 @@ func fixtureBlocked() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 			Err:    errors.New("dial udp stun.cloudflare.com:3478: i/o timeout"),
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureOffline() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -118,7 +118,7 @@ func fixtureOffline() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 			Err:    errors.New("resolve stun.cloudflare.com: lookup stun.cloudflare.com: no such host"),
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 // fixtureFilteringEIF: EIM mapping + endpoint-independent filtering.
@@ -146,7 +146,7 @@ func fixtureFilteringEIF() (classify.Verdict, []probe.Result, *probe.FilteringRe
 		Test2Received: true,
 		Test3Received: true,
 	}
-	return classify.Classify(probes, f, nil), probes, f
+	return classify.Classify(probes, classify.Filtering{IPv4: f}, nil), probes, f
 }
 
 // fixtureFilteringADF: EIM mapping + address-dependent filtering.
@@ -174,7 +174,7 @@ func fixtureFilteringADF() (classify.Verdict, []probe.Result, *probe.FilteringRe
 		Test2Received: false,
 		Test3Received: true,
 	}
-	return classify.Classify(probes, f, nil), probes, f
+	return classify.Classify(probes, classify.Filtering{IPv4: f}, nil), probes, f
 }
 
 // hairpinTrue / hairpinFalse return *bool for fixture construction —
@@ -202,7 +202,7 @@ func fixtureHairpinningDetected() (classify.Verdict, []probe.Result, *probe.Filt
 		},
 	}
 	h := &probe.HairpinningResult{Server: probes[0].Server, Detected: hairpinTrue()}
-	return classify.Classify(probes, nil, h), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, h), probes, nil
 }
 
 // fixtureHairpinningNotDetected: EIM mapping + hairpinning probed but did
@@ -224,7 +224,7 @@ func fixtureHairpinningNotDetected() (classify.Verdict, []probe.Result, *probe.F
 		},
 	}
 	h := &probe.HairpinningResult{Server: probes[0].Server, Detected: hairpinFalse()}
-	return classify.Classify(probes, nil, h), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, h), probes, nil
 }
 
 // fixtureHairpinningUntested: hairpin probe attempted but socket setup or
@@ -246,7 +246,7 @@ func fixtureHairpinningUntested() (classify.Verdict, []probe.Result, *probe.Filt
 		},
 	}
 	h := &probe.HairpinningResult{Server: probes[0].Server, Err: errors.New("simulated socket setup failure")}
-	return classify.Classify(probes, nil, h), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, h), probes, nil
 }
 
 // fixtureInsufficientProbes: a single successful probe. Combined verdict is
@@ -262,13 +262,42 @@ func fixtureInsufficientProbes() (classify.Verdict, []probe.Result, *probe.Filte
 			RTT:    24 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
-// fixtureMixedV4V6Disagree: IPv4 group agrees on EIM, IPv6 group disagrees
-// (looks like ADM). Combined verdict is Unknown. Exercises the render path
-// for WarnMixedAddressFamilyProbes — the v0.1.3 cross-address-family
-// classifier fix had no render regression guard before this fixture.
+// fixtureIPv4Stricter: IPv4 maps differently (ADM), IPv6 EIM; IPv4 decides.
+func fixtureIPv4Stricter() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("[2001:db8:c::1]:19302"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    42 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51821"),
+			RTT:    31 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("[2001:db8:d::1]:3478"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    47 * time.Millisecond,
+		},
+	}
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
+}
+
+// fixtureMixedV4V6Disagree: IPv4 agrees on EIM, IPv6 maps differently (ADM).
+// IPv4 decides; address_families_disagree names both forecasts.
 func fixtureMixedV4V6Disagree() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 	probes := []probe.Result{
 		{
@@ -296,7 +325,7 @@ func fixtureMixedV4V6Disagree() (classify.Verdict, []probe.Result, *probe.Filter
 			RTT:    47 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 // fixtureFilteringAPDF: EIM mapping + address-and-port-dependent filtering.
@@ -324,7 +353,7 @@ func fixtureFilteringAPDF() (classify.Verdict, []probe.Result, *probe.FilteringR
 		Test2Received: false,
 		Test3Received: false,
 	}
-	return classify.Classify(probes, f, nil), probes, f
+	return classify.Classify(probes, classify.Filtering{IPv4: f}, nil), probes, f
 }
 
 func fixtureNoNAT() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -344,7 +373,7 @@ func fixtureNoNAT() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 			Untranslated: true,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureMappingTestAPDM() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -370,7 +399,7 @@ func fixtureMappingTestAPDM() (classify.Verdict, []probe.Result, *probe.Filterin
 		AltIPMapped:       netip.MustParseAddrPort("203.0.113.45:51831"),
 		AltEndpointMapped: netip.MustParseAddrPort("203.0.113.45:51832"),
 	}
-	return classify.Classify(probes, f, nil), probes, f
+	return classify.Classify(probes, classify.Filtering{IPv4: f}, nil), probes, f
 }
 
 // compareGolden loads want from path and diff-compares against got. Set
@@ -420,6 +449,7 @@ func TestRender_Golden(t *testing.T) {
 		{"filtering_adf", fixtureFilteringADF},
 		{"filtering_apdf", fixtureFilteringAPDF},
 		{"mixed_v4v6_disagree", fixtureMixedV4V6Disagree},
+		{"ipv4_stricter", fixtureIPv4Stricter},
 		{"insufficient_probes", fixtureInsufficientProbes},
 		{"hairpinning_detected", fixtureHairpinningDetected},
 		{"hairpinning_not_detected", fixtureHairpinningNotDetected},

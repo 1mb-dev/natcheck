@@ -1,0 +1,45 @@
+{
+  "nat_type": "ADM",
+  "nat_type_legacy": "symmetric",
+  "public_endpoint": "203.0.113.45:51820",
+  "probes": [
+    {
+      "server": "stun.l.google.com:19302",
+      "target": "192.0.2.10:19302",
+      "rtt_ms": 24,
+      "mapped": "203.0.113.45:51820"
+    },
+    {
+      "server": "stun.l.google.com:19302",
+      "target": "[2001:db8:c::1]:19302",
+      "rtt_ms": 42,
+      "mapped": "[2001:db8::1]:51820"
+    },
+    {
+      "server": "stun.cloudflare.com:3478",
+      "target": "192.0.2.20:3478",
+      "rtt_ms": 31,
+      "mapped": "203.0.113.45:51821"
+    },
+    {
+      "server": "stun.cloudflare.com:3478",
+      "target": "[2001:db8:d::1]:3478",
+      "rtt_ms": 47,
+      "mapped": "[2001:db8::1]:51820"
+    }
+  ],
+  "webrtc_forecast": {
+    "direct_p2p": "unlikely",
+    "turn_required": true
+  },
+  "warnings": [
+    "filtering_behavior_not_tested",
+    "address_families_disagree",
+    "adm_or_stricter",
+    "hairpin_untested"
+  ],
+  "filtering": {
+    "behavior": "untested"
+  },
+  "hairpinning": null
+}

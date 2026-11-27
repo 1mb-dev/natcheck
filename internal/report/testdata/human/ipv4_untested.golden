@@ -7,5 +7,5 @@ Probes:
   stun.cloudflare.com:3478 (2001:db8:b::1)  rtt=31ms  mapped=[2001:db8::1]:51820
 
 Filtering not tested.
-IPv4 not tested; this verdict covers IPv6 only.
+No IPv4 probe succeeded; this verdict covers IPv6 only.
 Hairpinning not tested (local socket setup, STUN probe or listen read failed, the server reported a mapped address natcheck does not send to, or --timeout ran out).

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -329,6 +330,75 @@ func TestRun_FilteringPicksFirstCapableServer(t *testing.T) {
 	}
 	if calledWith[0] != srv2 {
 		t.Errorf("filterer called with %v, want %v", calledWith[0], srv2)
+	}
+}
+
+func TestRun_FilteringRunsInEachFamily(t *testing.T) {
+	srv := []probe.Server{{Host: "a.example", Port: 3478}, {Host: "b.example", Port: 3478}, {Host: "c.example", Port: 3478}, {Host: "d.example", Port: 3478}, {Host: "unmapped.example", Port: 3478}}
+	other := netip.MustParseAddrPort("198.51.100.9:3479")
+	fp := &fakeProber{resultsByServer: map[string]probe.Result{
+		serverKey(srv[4]): {Other: other}, // no mapping: belongs to no family
+		serverKey(srv[0]): {Mapped: netip.MustParseAddrPort("203.0.113.45:51820")},
+		serverKey(srv[1]): {Mapped: netip.MustParseAddrPort("203.0.113.45:51820"), Other: other},
+		serverKey(srv[2]): {Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"), Other: other},
+		serverKey(srv[3]): {Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"), Other: other},
+	}}
+	var mu sync.Mutex
+	var calledWith []probe.Server
+	var calls atomic.Int32
+	both := make(chan struct{})
+	filterer := func(s probe.Server, _ netip.AddrPort, _ time.Duration) probe.FilteringResult {
+		mu.Lock()
+		calledWith = append(calledWith, s)
+		mu.Unlock()
+		if calls.Add(1) == 2 {
+			close(both)
+		}
+		select {
+		case <-both:
+		case <-time.After(5 * time.Second):
+			t.Error("one family's filtering waited for the other's to finish")
+		}
+		return probe.FilteringResult{Server: s, Test2Received: true, Test3Received: true}
+	}
+
+	var out, errOut bytes.Buffer
+	args := []string{"--json", "--server", serverKey(srv[4])}
+	for _, s := range srv[:4] {
+		args = append(args, "--server", serverKey(s))
+	}
+	code := runWith(context.Background(), args, &out, &errOut, fp, filterer, noHairpiner)
+	if code != 0 || !strings.Contains(out.String(), `"direct_p2p": "likely"`) {
+		t.Errorf("code = %d, out = %s; want 0 and likely", code, out.String())
+	}
+	slices.SortFunc(calledWith, func(a, b probe.Server) int { return strings.Compare(a.Host, b.Host) })
+	if !slices.Equal(calledWith, []probe.Server{srv[1], srv[2]}) {
+		t.Errorf("filterer called with %v, want the first capable server of each family: %v, %v", calledWith, srv[1], srv[2])
+	}
+}
+
+// listProber returns its results whatever the servers.
+type listProber []probe.Result
+
+func (p listProber) ProbeAll(context.Context, []probe.Server) []probe.Result { return p }
+
+func TestRun_FilteringUsesComparedRows(t *testing.T) {
+	a, b := probe.Server{Host: "a.example", Port: 3478}, probe.Server{Host: "b.example", Port: 3478}
+	other := netip.MustParseAddrPort("198.51.100.9:3479")
+	p := listProber{
+		{Server: a, Target: netip.MustParseAddrPort("192.0.2.10:3478"), Err: errors.New("no response")},
+		{Server: a, Target: netip.MustParseAddrPort("[64:ff9b::c000:20a]:3478"), Mapped: netip.MustParseAddrPort("203.0.113.45:40000"), Other: other},
+		{Server: b, Target: netip.MustParseAddrPort("192.0.2.20:3478"), Mapped: netip.MustParseAddrPort("203.0.113.45:51820"), Other: other},
+	}
+	var calledWith []probe.Server
+	filterer := func(s probe.Server, _ netip.AddrPort, _ time.Duration) probe.FilteringResult {
+		calledWith = append(calledWith, s)
+		return probe.FilteringResult{Server: s}
+	}
+	var out, errOut bytes.Buffer
+	runWith(context.Background(), []string{"--json"}, &out, &errOut, p, filterer, noHairpiner)
+	if !slices.Equal(calledWith, []probe.Server{b}) {
+		t.Errorf("filterer called with %v, want %v: the NAT64 row is not compared beside an IPv4 socket row", calledWith, b)
 	}
 }
 

@@ -23,10 +23,10 @@ func natTypeHuman(v classify.Verdict) string {
 	return name
 }
 
-// warningText maps a stable warning ID to a short human sentence. Unknown IDs
-// fall through to the raw ID so newly introduced warnings surface without
-// code changes here.
-func warningText(id string) string {
+// warningText maps a stable warning ID to a short human sentence, filled from
+// v where the sentence names values. Unknown IDs fall through to the raw ID so
+// newly introduced warnings surface without code changes here.
+func warningText(id string, v classify.Verdict) string {
 	switch id {
 	case classify.WarnFilteringBehaviorNotTested:
 		return "Filtering not tested."
@@ -44,12 +44,13 @@ func warningText(id string) string {
 		// combined verdict (when the other family had two probes that agreed);
 		// the text must not imply the verdict itself is unknown.
 		return "Insufficient probes for one or more address families."
-	case classify.WarnMixedAddressFamilyProbes:
-		return "Mapping classification spans IPv4 and IPv6; each family observes its own NAT."
+	case classify.WarnAddressFamiliesDisagree:
+		return fmt.Sprintf("IPv4 reads %s and IPv6 reads %s. The verdict follows IPv4: a peer without IPv6 depends on it, and natcheck does not test the peer.",
+			v.IPv4.Forecast.DirectP2P, v.IPv6.Forecast.DirectP2P)
 	case classify.WarnHairpinUntested:
 		return "Hairpinning not tested (local socket setup, STUN probe or listen read failed, the server reported a mapped address natcheck does not send to, or --timeout ran out)."
 	case classify.WarnIPv4Untested:
-		return "IPv4 not tested; this verdict covers IPv6 only."
+		return "No IPv4 probe succeeded; this verdict covers IPv6 only."
 	case classify.WarnNoNAT:
 		return "No NAT on the probed path: the mapped endpoint is this host's own address and port. A firewall may still filter."
 	case classify.WarnInsufficientServerDiversity:
@@ -128,7 +129,7 @@ func renderHuman(w io.Writer, v classify.Verdict, probes []probe.Result) error {
 	if len(v.Warnings) > 0 {
 		b.WriteString("\n")
 		for _, id := range v.Warnings {
-			fmt.Fprintln(&b, warningText(id))
+			fmt.Fprintln(&b, warningText(id, v))
 		}
 	}
 

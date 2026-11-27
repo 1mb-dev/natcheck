@@ -54,17 +54,47 @@ func startSTUNServers(t *testing.T, n int) []*net.UDPAddr {
 
 func startNATSim(t *testing.T, servers []*net.UDPAddr, perDestination bool) []*net.UDPAddr {
 	t.Helper()
-	n := &natSim{t: t, perDestination: perDestination, servers: servers, external: map[string]*net.UDPConn{}}
-	front := make([]*net.UDPAddr, len(servers))
-	for i := range servers {
-		d := listenLoopback(t)
-		n.doors = append(n.doors, d)
-		front[i] = d.LocalAddr().(*net.UDPAddr)
+	doors := make([]*net.UDPConn, len(servers))
+	for i := range doors {
+		doors[i] = listenLoopback(t)
 	}
-	for i := range n.doors {
+	return startNATSimOn(t, servers, doors, perDestination)
+}
+
+func startNATSimOn(t *testing.T, servers []*net.UDPAddr, doors []*net.UDPConn, perDestination bool) []*net.UDPAddr {
+	t.Helper()
+	n := &natSim{t: t, perDestination: perDestination, servers: servers, doors: doors, external: map[string]*net.UDPConn{}}
+	front := make([]*net.UDPAddr, len(servers))
+	for i, d := range doors {
+		front[i] = d.LocalAddr().(*net.UDPAddr)
 		go n.forward(i)
 	}
 	return front
+}
+
+// dualStackDoors binds n IPv4 loopback doors, each with an IPv6 loopback STUN
+// server on the same port, so one host:port reaches both. It skips the test
+// when ::1 does not bind.
+func dualStackDoors(t *testing.T, n int) (doors []*net.UDPConn, v6 []*net.UDPAddr) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	for len(doors) < n {
+		d := listenLoopback(t)
+		port := d.LocalAddr().(*net.UDPAddr).Port
+		c, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: port})
+		if err != nil {
+			if _, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback}); err != nil {
+				t.Skipf("IPv6 loopback unavailable: %v", err)
+			}
+			continue
+		}
+		t.Cleanup(func() { _ = c.Close() })
+		go func() { _ = stunserver.New(stunserver.Options{}).Serve(ctx, c) }()
+		doors = append(doors, d)
+		v6 = append(v6, c.LocalAddr().(*net.UDPAddr))
+	}
+	return doors, v6
 }
 
 func (n *natSim) forward(door int) {
@@ -117,8 +147,17 @@ type distinctTargets struct{ probe.Prober }
 
 func (d distinctTargets) ProbeAll(ctx context.Context, servers []probe.Server) []probe.Result {
 	results := d.Prober.ProbeAll(ctx, servers)
-	for i := range results {
-		results[i].Target = netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i + 1)}), results[i].Target.Port())
+	var n4, n6 byte
+	for i, r := range results {
+		switch {
+		case !r.Target.IsValid():
+		case r.Target.Addr().Is4():
+			n4++
+			results[i].Target = netip.AddrPortFrom(netip.AddrFrom4([4]byte{198, 51, 100, n4}), r.Target.Port())
+		default:
+			n6++
+			results[i].Target = netip.AddrPortFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 15: n6}), r.Target.Port())
+		}
 	}
 	return results
 }
@@ -290,5 +329,24 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 				t.Errorf("no_nat present = %v, want %v; warnings=%v", got, tt.wantNoNAT, report.Warnings)
 			}
 		})
+	}
+}
+
+// A hostname with both A and AAAA records, IPv6 first as DNS prefers: IPv6
+// reaches the servers untranslated, IPv4 crosses a per-destination NAT. The
+// IPv4 verdict decides (docs/design.md § Address families).
+func TestRun_DualStackHostnameProbesBothFamilies(t *testing.T) {
+	doors, v6 := dualStackDoors(t, 2)
+	startNATSimOn(t, startSTUNServers(t, 2), doors, true)
+	lookup := func(_ context.Context, _, _ string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.IPv6Loopback(), netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	prober := distinctTargets{probe.NewSTUNWithResolver(lookup)}
+	code, out, errOut := run(t, prober, "--json", "--timeout", "2s",
+		"--server", fmt.Sprintf("dual-a.test:%d", v6[0].Port), "--server", fmt.Sprintf("dual-b.test:%d", v6[1].Port))
+
+	report := decodeMappingReport(t, out, errOut)
+	if report.NATType != "ADM" || report.WebRTCForecast.DirectP2P != "unlikely" || code != 1 {
+		t.Errorf("nat_type, direct_p2p, exit = %q, %q, %d; want ADM, unlikely, 1; out=%s", report.NATType, report.WebRTCForecast.DirectP2P, code, out)
 	}
 }

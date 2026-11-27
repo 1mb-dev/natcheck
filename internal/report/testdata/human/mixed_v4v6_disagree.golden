@@ -1,5 +1,5 @@
-Direct P2P: unknown
-NAT type: Unknown
+Direct P2P: possible
+NAT type: Endpoint-Independent Mapping (cone)
 Public endpoint: 203.0.113.45:51820
 
 Probes:
@@ -9,5 +9,5 @@ Probes:
   stun6.cloudflare.com:3478 (2001:db8:d::1)  rtt=47ms  mapped=[2001:db8::2]:51821
 
 Filtering not tested.
-Mapping classification spans IPv4 and IPv6; each family observes its own NAT.
+IPv4 reads possible and IPv6 reads unlikely. The verdict follows IPv4: a peer without IPv6 depends on it, and natcheck does not test the peer.
 Hairpinning not tested (local socket setup, STUN probe or listen read failed, the server reported a mapped address natcheck does not send to, or --timeout ran out).
