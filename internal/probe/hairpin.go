@@ -71,7 +71,7 @@ func probeHairpinning(ctx context.Context, server Server, timeout time.Duration,
 	if server.Host == "" || server.Port <= 0 || server.Port > 65535 {
 		return HairpinningResult{Server: server, Err: fmt.Errorf("invalid server %q:%d", server.Host, server.Port)}
 	}
-	ips, err := resolveHost(ctx, server.Host)
+	ips, err := resolveHost(ctx, net.DefaultResolver.LookupNetIP, server.Host)
 	if err != nil {
 		return HairpinningResult{Server: server, Err: fmt.Errorf("resolve %s: %w", server.Host, err)}
 	}

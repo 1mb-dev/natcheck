@@ -14,18 +14,30 @@ import (
 
 // NewSTUN returns a Prober backed by pion/stun over UDP.
 func NewSTUN() Prober {
-	return stunProber{}
+	return stunProber{lookup: net.DefaultResolver.LookupNetIP}
 }
 
-type stunProber struct{}
+// Resolver looks up host's addresses for network "ip", as
+// net.Resolver.LookupNetIP does. IP literals never reach it
+// (TestResolveHost_LiteralsSkipTheResolver).
+type Resolver func(ctx context.Context, network, host string) ([]netip.Addr, error)
+
+// NewSTUNWithResolver is NewSTUN with hostnames resolved by lookup, so tests
+// can give a hostname loopback addresses in both families.
+func NewSTUNWithResolver(lookup Resolver) Prober {
+	return stunProber{lookup: lookup}
+}
+
+type stunProber struct{ lookup Resolver }
 
 // ProbeAll sends one STUN Binding request to each server, concurrently, and
 // returns results in input order. Servers in the same address family share one
 // local socket: mapped endpoints are only comparable when they come from the
 // same local endpoint. Unanswered requests are retransmitted on the
 // retransmitGaps schedule. ctx bounds the whole run.
-func (stunProber) ProbeAll(ctx context.Context, servers []Server) []Result {
+func (p stunProber) ProbeAll(ctx context.Context, servers []Server) []Result {
 	run := newMappingRun()
+	run.lookup = p.lookup
 	defer run.close()
 
 	results := make([]Result, len(servers))
@@ -58,6 +70,7 @@ type transactionID = [stun.TransactionIDSize]byte
 type mappingRun struct {
 	listen    func(network, address string) (net.PacketConn, error)
 	hostAddrs func() ([]net.Addr, error)
+	lookup    Resolver
 
 	mu      sync.Mutex
 	sockets map[string]familySocket
@@ -96,6 +109,7 @@ func newMappingRun() *mappingRun {
 	return &mappingRun{
 		listen:    net.ListenPacket,
 		hostAddrs: net.InterfaceAddrs,
+		lookup:    net.DefaultResolver.LookupNetIP,
 		sockets:   map[string]familySocket{},
 		pending:   map[transactionID]*transaction{},
 	}
@@ -116,7 +130,7 @@ func (r *mappingRun) probe(ctx context.Context, s Server) Result {
 	if s.Host == "" || s.Port <= 0 || s.Port > 65535 {
 		return Result{Server: s, Err: fmt.Errorf("invalid server %q:%d", s.Host, s.Port)}
 	}
-	ips, err := resolveHost(ctx, s.Host)
+	ips, err := resolveHost(ctx, r.lookup, s.Host)
 	if err != nil {
 		return Result{Server: s, Err: fmt.Errorf("resolve %s: %w", s.Host, err)}
 	}
@@ -128,11 +142,11 @@ func (r *mappingRun) probe(ctx context.Context, s Server) Result {
 
 // resolveHost keeps the zone of a literal address. LookupNetIP strips it, and a
 // link-local address is unroutable without one.
-func resolveHost(ctx context.Context, host string) ([]netip.Addr, error) {
+func resolveHost(ctx context.Context, lookup Resolver, host string) ([]netip.Addr, error) {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return []netip.Addr{ip}, nil
 	}
-	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	return lookup(ctx, "ip", host)
 }
 
 // probeAddrs uses the first address that accepts a send. A host with an AAAA

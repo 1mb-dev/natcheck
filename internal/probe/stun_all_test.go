@@ -374,7 +374,7 @@ func TestResolveHost_LiteralsSkipTheResolver(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for _, host := range []string{"192.0.2.1", "2001:db8::1", "fe80::1%eth0"} {
-		ips, err := resolveHost(ctx, host)
+		ips, err := resolveHost(ctx, net.DefaultResolver.LookupNetIP, host)
 		if err != nil {
 			t.Fatalf("resolveHost(%q): %v", host, err)
 		}
