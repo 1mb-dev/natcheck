@@ -154,8 +154,7 @@ flowchart TD
 ## Dependencies
 
 - **Runtime:** `github.com/pion/stun/v3` (latest stable). Nothing else for v0.1.
-- **Dev:** `golangci-lint` v2.9.0+.
-- **Go version:** 1.25+.
+- **Dev:** Go and `golangci-lint` versions in [`.github/CONTRIBUTING.md`](../.github/CONTRIBUTING.md#build).
 
 Rejected for v0.1:
 
@@ -316,7 +315,7 @@ No live-network test in CI. Manual verification against real networks before rel
 
 - `make build` → single binary in repo root, versioned via `-ldflags "-X main.version=..."`
 - `make test` → unit + integration with in-process test server, no network
-- `make lint` → `golangci-lint` v2.9.0
+- `make lint` → `golangci-lint`
 - Release: `git tag v0.1.0`, push.
 
 ## Non-functional targets

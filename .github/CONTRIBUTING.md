@@ -10,7 +10,7 @@ cd natcheck
 make build     # or: go build ./...
 ```
 
-Requirements: Go 1.26+. Lint uses [golangci-lint](https://golangci-lint.run/) v2.9.0, as CI does (`make setup` installs it). It fails to typecheck on Go 1.27, so there run `GOTOOLCHAIN=go1.26.0 make lint`.
+Requirements: Go 1.26.3+. Lint uses [golangci-lint](https://golangci-lint.run/) v2.15.0, as CI does (`make setup` installs it).
 
 ## Test
 

@@ -1,6 +1,6 @@
 module github.com/1mb-dev/natcheck
 
-go 1.26.0
+go 1.26.3
 
 require github.com/pion/stun/v3 v3.1.7
 

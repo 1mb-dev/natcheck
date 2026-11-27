@@ -20,7 +20,7 @@ Built on [`pion/stun`](https://github.com/pion/stun). Pure Go, single static bin
 brew install 1mb-dev/tap/natcheck
 ```
 
-**Go install (any platform with Go 1.26+):**
+**Go install (any platform with Go 1.26.3+):**
 
 ```bash
 go install github.com/1mb-dev/natcheck/cmd/natcheck@latest
