@@ -23,6 +23,7 @@ All notable changes to this project are documented here. Format follows [Keep a 
 - A filtering or hairpinning read that fails for any reason but its deadline no longer counts as no reply: filtering stays untested instead of reading stricter, and hairpinning reads `null` with `hairpin_untested` instead of `false`.
 - A filtering CHANGE-REQUEST that fails to send now warns `filtering_behavior_not_tested` instead of `filtering_skipped_no_change_request`.
 - `--timeout` help states the longest the RFC 5780 tests can add, 3.75s, instead of 1.5s.
+- The hairpin tag goes only to a mapped endpoint that passes the family, scope and never-block checks in [`docs/design.md` § Mapping tests](docs/design.md#mapping-tests-rfc-5780-43); otherwise hairpinning reads `null` with `hairpin_untested`.
 
 ## [0.1.6] — 2026-11-26
 

@@ -8,4 +8,4 @@ Probes:
 
 Filtering not tested.
 No NAT on the probed path: the mapped endpoint is this host's own address and port. A firewall may still filter.
-Hairpinning not tested (local socket setup, STUN probe or listen read failed, or --timeout ran out).
+Hairpinning not tested (local socket setup, STUN probe or listen read failed, the server reported a mapped address natcheck does not send to, or --timeout ran out).

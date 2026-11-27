@@ -7,4 +7,4 @@ Probes:
   stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
 
 Filtering not tested.
-Hairpinning not tested (local socket setup, STUN probe or listen read failed, or --timeout ran out).
+Hairpinning not tested (local socket setup, STUN probe or listen read failed, the server reported a mapped address natcheck does not send to, or --timeout ran out).

@@ -182,12 +182,11 @@ func mappingTestAllowed(target, other netip.AddrPort) bool {
 	return serverChosenAllowed(target.Addr(), other.Addr())
 }
 
-// serverChosenAllowed reports whether natcheck may send to addr, an address a
-// server chose, when the server is target. Apart from Tests II and III, the
-// only such packet is the hairpin tag. addr must be in target's family and
-// scope (addrScope), outside the never rows of specialRanges, and in 2000::/3
-// when it is a public IPv6 address (TestMappingTestAllowed,
-// TestSpecialRanges_MatchIANARegistry).
+// serverChosenAllowed reports whether natcheck may send to addr, an address the
+// server at target chose: OTHER-ADDRESS or the hairpin mapped endpoint. The
+// checks are those of docs/design.md § Mapping tests (TestMappingTestAllowed,
+// TestMappingTestAllowed_SpecialRanges,
+// TestHairpinAddrs_MappedOutsideScopeSendsNothing).
 func serverChosenAllowed(target, addr netip.Addr) bool {
 	t, a := target.Unmap(), addr.Unmap().WithZone("")
 	if !a.IsValid() || a.Is4() != t.Is4() || a.IsMulticast() {
