@@ -48,6 +48,8 @@ func warningText(id string) string {
 		return "Hairpinning not tested (local socket setup, STUN probe or listen read failed, or --timeout ran out)."
 	case classify.WarnIPv4Untested:
 		return "IPv4 not tested; this verdict covers IPv6 only."
+	case classify.WarnNoNAT:
+		return "No NAT on the probed path: the mapped endpoint is this host's own address and port. A firewall may still filter."
 	case classify.WarnInsufficientServerDiversity:
 		return "Servers share one IP, which cannot show mapping behavior. Use --server values on two different IPs."
 	default:

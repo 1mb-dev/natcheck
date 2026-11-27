@@ -172,13 +172,14 @@ type Server struct {
 }
 
 type Result struct {
-    Server  Server
-    Target  netip.AddrPort // resolved address, zero if nothing was sent
-    Mapped  netip.AddrPort // zero if probe failed
-    Other   netip.AddrPort // OTHER-ADDRESS, zero if not advertised
-    RTT     time.Duration  // zero if probe failed
-    Replied bool           // a reply with this request's transaction ID arrived from the target, usable or not (TestProbe_RepliedWithoutMapping)
-    Err     error          // nil on success
+    Server       Server
+    Target       netip.AddrPort // resolved address, zero if nothing was sent
+    Mapped       netip.AddrPort // zero if probe failed
+    Other        netip.AddrPort // OTHER-ADDRESS, zero if not advertised
+    RTT          time.Duration  // zero if probe failed
+    Replied      bool           // a reply with this request's transaction ID arrived from the target, usable or not (TestProbe_RepliedWithoutMapping)
+    Untranslated bool           // Mapped is an interface address of this host with the probe's local port (TestProbe_Untranslated)
+    Err          error          // nil on success
 }
 
 type Prober interface {
@@ -269,6 +270,8 @@ With only basic STUN Binding responses (no `CHANGE-REQUEST`), we can determine:
   - Different mapped endpoints → Address-Dependent or Address-Port-Dependent Mapping. v0.1 cannot distinguish ADM from APDM without `CHANGE-REQUEST`; it reports "ADM or stricter" and emits warning `adm_or_stricter`.
 
 Mappings that agree across fewer than two server IPs read `Unknown` with warning `insufficient_server_diversity`: one IP cannot separate EIM from ADM.
+
+When every successful probe, in every address family, maps to one of this host's interface addresses with the port it left from, the warning `no_nat` reports that nothing on the path translated it. One probe is enough. The type, legacy name and forecast stay those of the mapping (`TestClassify_NoNAT`, `TestProbe_Untranslated`, `TestRun_MappingBehaviorOverRealSockets`).
 
 Filtering needs `CHANGE-REQUEST`, covered below.
 

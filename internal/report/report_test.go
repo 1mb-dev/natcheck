@@ -327,6 +327,26 @@ func fixtureFilteringAPDF() (classify.Verdict, []probe.Result, *probe.FilteringR
 	return classify.Classify(probes, f, nil), probes, f
 }
 
+func fixtureNoNAT() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server:       probe.Server{Host: "192.0.2.10", Port: 3478},
+			Target:       netip.MustParseAddrPort("192.0.2.10:3478"),
+			Mapped:       netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:          24 * time.Millisecond,
+			Untranslated: true,
+		},
+		{
+			Server:       probe.Server{Host: "192.0.2.20", Port: 3478},
+			Target:       netip.MustParseAddrPort("192.0.2.20:3478"),
+			Mapped:       netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:          31 * time.Millisecond,
+			Untranslated: true,
+		},
+	}
+	return classify.Classify(probes, nil, nil), probes, nil
+}
+
 // compareGolden loads want from path and diff-compares against got. Set
 // NATCHECK_UPDATE_GOLDEN=1 to (re)generate the golden file from got.
 func compareGolden(t *testing.T, path string, got []byte) {
@@ -378,6 +398,7 @@ func TestRender_Golden(t *testing.T) {
 		{"hairpinning_detected", fixtureHairpinningDetected},
 		{"hairpinning_not_detected", fixtureHairpinningNotDetected},
 		{"hairpinning_untested", fixtureHairpinningUntested},
+		{"no_nat", fixtureNoNAT},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

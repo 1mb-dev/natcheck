@@ -150,6 +150,7 @@ const (
 	WarnHairpinUntested                 = "hairpin_untested"
 	WarnInsufficientServerDiversity     = "insufficient_server_diversity"
 	WarnIPv4Untested                    = "ipv4_untested"
+	WarnNoNAT                           = "no_nat"
 )
 
 // cgnatPrefix is RFC 6598 shared address space.
@@ -274,6 +275,10 @@ func classifyMapping(results []probe.Result) Verdict {
 			v.Warnings = appendUnique(v.Warnings, w)
 		}
 	}
+	// One probe is enough. The forecast stays the mapping's (TestClassify_NoNAT).
+	if !slices.ContainsFunc(successes, func(r probe.Result) bool { return !r.Untranslated }) {
+		v.Warnings = append(v.Warnings, WarnNoNAT)
+	}
 
 	return v
 }
@@ -326,9 +331,9 @@ func appendUnique(ws []string, w string) []string {
 }
 
 // classifyGroup runs the case-1/case-many mapping classification for a
-// non-empty set of successful probes. CGNAT detection is applied. Warnings
-// returned do NOT include WarnFilteringBehaviorNotTested — that's the
-// caller's concern at the combined-verdict level.
+// non-empty set of successful probes. CGNAT detection is applied.
+// Warnings returned do NOT include WarnFilteringBehaviorNotTested — that's
+// the caller's concern at the combined-verdict level.
 func classifyGroup(group []probe.Result) Verdict {
 	v := Verdict{}
 	switch len(group) {

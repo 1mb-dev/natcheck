@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+### Added
+
+- Warning `no_nat` when every successful probe maps to this host's own address and the port it left from; the NAT type and forecast are unchanged (#39).
+
 ### Fixed
 
 - Hairpinning reads `null` with `hairpin_untested`, not `false`, when `--timeout` ends before its listen does; the listen is capped at two thirds of the time `--timeout` leaves after DNS (#48).

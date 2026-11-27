@@ -212,6 +212,7 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 		wantType     string
 		wantForecast string
 		wantCode     int
+		wantNoNAT    bool
 	}{
 		{
 			name:         "no NAT",
@@ -219,6 +220,7 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 			wantType:     "EIM",
 			wantForecast: "possible",
 			wantCode:     0,
+			wantNoNAT:    true,
 		},
 		{
 			name: "endpoint-independent NAT",
@@ -254,6 +256,9 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 			}
 			if code != tt.wantCode {
 				t.Errorf("exit code = %d, want %d", code, tt.wantCode)
+			}
+			if got := slices.Contains(report.Warnings, "no_nat"); got != tt.wantNoNAT {
+				t.Errorf("no_nat present = %v, want %v; warnings=%v", got, tt.wantNoNAT, report.Warnings)
 			}
 		})
 	}

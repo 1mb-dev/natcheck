@@ -801,3 +801,41 @@ func TestClassify_IPv4UntestedWarning(t *testing.T) {
 		})
 	}
 }
+
+func TestClassify_NoNAT(t *testing.T) {
+	untranslated := func(r probe.Result) probe.Result { r.Untranslated = true; return r }
+	v4 := func(host string) probe.Result { return ok(host, 3478, "203.0.113.45:51820", time.Millisecond) }
+	v6 := func(host string) probe.Result { return ok(host, 3478, "[2001:db8::1]:51820", time.Millisecond) }
+
+	cases := []struct {
+		name    string
+		results []probe.Result
+		want    bool
+	}{
+		{"every probe untranslated", []probe.Result{untranslated(v6("a")), untranslated(v6("b"))}, true},
+		{"one probe, untranslated", []probe.Result{untranslated(v6("a")), fail("b", 3478)}, true},
+		{"one of two untranslated", []probe.Result{untranslated(v4("a")), v4("b")}, false},
+		{"none untranslated", []probe.Result{v4("a"), v4("b")}, false},
+		{"IPv6 untranslated, IPv4 translated", []probe.Result{untranslated(v6("a")), untranslated(v6("b")), v4("c"), v4("d")}, false},
+		{"both families untranslated", []probe.Result{untranslated(v6("a")), untranslated(v4("c"))}, true},
+		{"failed probe flagged", []probe.Result{v4("a"), v4("b"), untranslated(fail("c", 3478))}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			v := Classify(tc.results, nil, nil)
+			if got := slices.Contains(v.Warnings, WarnNoNAT); got != tc.want {
+				t.Errorf("no_nat present = %v, want %v; warnings=%v", got, tc.want, v.Warnings)
+			}
+			// The warning reports; it does not judge.
+			plain := make([]probe.Result, len(tc.results))
+			for i, r := range tc.results {
+				r.Untranslated = false
+				plain[i] = r
+			}
+			base := Classify(plain, nil, nil)
+			if v.Type != base.Type || v.LegacyName != base.LegacyName || v.Forecast != base.Forecast {
+				t.Errorf("verdict moved: %v %q %+v, want %v %q %+v", v.Type, v.LegacyName, v.Forecast, base.Type, base.LegacyName, base.Forecast)
+			}
+		})
+	}
+}
