@@ -3,8 +3,8 @@ NAT type: Endpoint-Independent Mapping (cone)
 Public endpoint: 203.0.113.45:51820
 
 Probes:
-  stun.l.google.com:19302   rtt=24ms  mapped=203.0.113.45:51820
-  stun.cloudflare.com:3478  rtt=31ms  mapped=203.0.113.45:51820
+  stun.l.google.com:19302 (192.0.2.10)   rtt=24ms  mapped=203.0.113.45:51820
+  stun.cloudflare.com:3478 (192.0.2.20)  rtt=31ms  mapped=203.0.113.45:51820
 
 Filtering not tested.
 Hairpinning not tested (local socket setup, STUN probe or listen read failed, the server reported a mapped address natcheck does not send to, or --timeout ran out).

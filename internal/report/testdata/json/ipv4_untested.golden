@@ -5,11 +5,13 @@
   "probes": [
     {
       "server": "stun.l.google.com:19302",
+      "target": "[2001:db8:a::1]:19302",
       "rtt_ms": 24,
       "mapped": "[2001:db8::1]:51820"
     },
     {
       "server": "stun.cloudflare.com:3478",
+      "target": "[2001:db8:b::1]:3478",
       "rtt_ms": 31,
       "mapped": "[2001:db8::1]:51820"
     }

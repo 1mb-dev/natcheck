@@ -155,12 +155,16 @@ func exitCode(v classify.Verdict) int {
 
 func logProbe(w io.Writer, r probe.Result) {
 	addr := net.JoinHostPort(r.Server.Host, strconv.Itoa(r.Server.Port))
+	target := ""
+	if r.Target.IsValid() {
+		target = fmt.Sprintf(" target=%s", r.Target)
+	}
 	if r.Err != nil {
-		_, _ = fmt.Fprintf(w, "probe %s: error: %v\n", addr, r.Err)
+		_, _ = fmt.Fprintf(w, "probe %s:%s error: %v\n", addr, target, r.Err)
 		return
 	}
-	_, _ = fmt.Fprintf(w, "probe %s: rtt=%s mapped=%s\n",
-		addr, r.RTT.Round(time.Millisecond), r.Mapped)
+	_, _ = fmt.Fprintf(w, "probe %s:%s rtt=%s mapped=%s\n",
+		addr, target, r.RTT.Round(time.Millisecond), r.Mapped)
 }
 
 // options is the parsed flag state.

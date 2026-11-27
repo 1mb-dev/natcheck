@@ -292,7 +292,7 @@ func TestProbeAll_LinkLocalServerKeepsZone(t *testing.T) {
 	}
 }
 
-func TestProbeAddrs_FamilyBindFailureFallsThrough(t *testing.T) {
+func TestProbe_EachFamilyOnItsOwn(t *testing.T) {
 	f := newFakeSTUN(t, 0, behaviorNormal)
 	s := fakeServer(f)
 
@@ -304,16 +304,22 @@ func TestProbeAddrs_FamilyBindFailureFallsThrough(t *testing.T) {
 		}
 		return net.ListenPacket(network, address)
 	}
+	run.lookup = func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("::1"), netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	s.Host = "dual.test"
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	ips := []netip.Addr{netip.MustParseAddr("::1"), netip.MustParseAddr("127.0.0.1")}
-	res := run.probeAddrs(ctx, s, ips)
-	if res.Err != nil {
-		t.Fatalf("expected fallback to IPv4, got: %v", res.Err)
+	res := run.probe(ctx, s)
+	if len(res) != 2 {
+		t.Fatalf("got %d results, want one per family: %+v", len(res), res)
 	}
-	if !res.Target.Addr().Is4() {
-		t.Errorf("Target = %v, want the IPv4 address", res.Target)
+	if res[0].Err != nil || !res[0].Target.Addr().Is4() {
+		t.Errorf("IPv4 result = %+v, want a reply from the IPv4 address", res[0])
+	}
+	if res[1].Err == nil || res[1].Target.IsValid() {
+		t.Errorf("IPv6 result = %+v, want the bind failure and no target", res[1])
 	}
 }
 
@@ -338,6 +344,73 @@ type refusedConn struct{ net.PacketConn }
 
 func (refusedConn) WriteTo([]byte, net.Addr) (int, error) {
 	return 0, &net.OpError{Op: "write", Net: "udp", Err: os.NewSyscallError("sendto", syscall.EPERM)}
+}
+
+// refusedToConn fails sends to one address as refusedConn does and passes the
+// rest.
+type refusedToConn struct {
+	net.PacketConn
+	refused netip.Addr
+}
+
+func (c refusedToConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if u, ok := addr.(*net.UDPAddr); ok && u.AddrPort().Addr().Unmap() == c.refused {
+		return refusedConn{}.WriteTo(b, addr)
+	}
+	return c.PacketConn.WriteTo(b, addr)
+}
+
+func TestProbeAddrs_FallsThroughWithinFamily(t *testing.T) {
+	f := newFakeSTUN(t, 0, behaviorNormal)
+	s := fakeServer(f)
+	refused := netip.MustParseAddr("127.0.0.2")
+
+	run := newMappingRun()
+	defer run.close()
+	run.listen = func(network, address string) (net.PacketConn, error) {
+		c, err := net.ListenPacket(network, address)
+		return refusedToConn{c, refused}, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res := run.probeAddrs(ctx, s, []netip.Addr{refused, netip.MustParseAddr("127.0.0.1")})
+	if res.Err != nil || res.Target != netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), uint16(s.Port)) {
+		t.Fatalf("Result = %+v, want a reply from the second address", res)
+	}
+}
+
+// A family that sends and hears nothing holds ProbeAll until ctx ends; the
+// other family's reply stands.
+func TestProbe_SilentFamilyHoldsTheRun(t *testing.T) {
+	var port int
+	for port == 0 {
+		_, p := newFakeSTUN(t, 0, behaviorNormal).addr()
+		c, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: p})
+		if err != nil {
+			any6, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})
+			if err != nil {
+				t.Skipf("IPv6 loopback unavailable: %v", err)
+			}
+			_ = any6.Close()
+			continue
+		}
+		t.Cleanup(func() { _ = c.Close() }) // bound, never read: silent
+		port = p
+	}
+	lookup := func(context.Context, string, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	res := NewSTUNWithResolver(lookup).ProbeAll(ctx, []Server{{Host: "dual.test", Port: port}})
+	if ctx.Err() == nil {
+		t.Error("ProbeAll returned before ctx ended, want the silent family to hold it")
+	}
+	if len(res) != 2 || res[0].Err != nil || !res[0].Target.Addr().Is4() || res[1].Err == nil || !res[1].Target.Addr().Is6() {
+		t.Fatalf("results = %+v, want an IPv4 reply and a sent, unanswered IPv6 request", res)
+	}
 }
 
 // A locally refused send leaves Target zero, as a resolve failure does.

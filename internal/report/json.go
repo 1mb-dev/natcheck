@@ -9,10 +9,12 @@ import (
 	"github.com/1mb-dev/natcheck/internal/probe"
 )
 
-// probeJSON is the per-probe shape in the JSON report. rtt_ms / mapped are
-// omitted for failed probes; error is omitted for successful ones.
+// probeJSON is the per-probe shape in the JSON report. target is omitted when
+// no request was sent; rtt_ms / mapped are omitted for failed probes; error is
+// omitted for successful ones.
 type probeJSON struct {
 	Server string `json:"server"`
+	Target string `json:"target,omitempty"`
 	RTTMs  int64  `json:"rtt_ms,omitempty"`
 	Mapped string `json:"mapped,omitempty"`
 	Error  string `json:"error,omitempty"`
@@ -89,6 +91,9 @@ func renderJSON(w io.Writer, v classify.Verdict, probes []probe.Result) error {
 
 	for i, p := range probes {
 		pj := probeJSON{Server: serverStr(p.Server)}
+		if p.Target.IsValid() {
+			pj.Target = p.Target.String()
+		}
 		if p.Err != nil {
 			pj.Error = p.Err.Error()
 		} else {

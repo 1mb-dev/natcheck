@@ -499,7 +499,7 @@ func TestProbe_Untranslated(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			res := run.probe(ctx, s)
+			res := run.probe(ctx, s)[0]
 			if res.Err != nil {
 				t.Fatalf("probe: %v", res.Err)
 			}

@@ -285,13 +285,13 @@ func fixtureMixedV4V6Disagree() (classify.Verdict, []probe.Result, *probe.Filter
 		},
 		{
 			Server: probe.Server{Host: "stun6.l.google.com", Port: 19302},
-			Target: netip.MustParseAddrPort("192.0.2.30:19302"),
+			Target: netip.MustParseAddrPort("[2001:db8:c::1]:19302"),
 			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
 			RTT:    42 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun6.cloudflare.com", Port: 3478},
-			Target: netip.MustParseAddrPort("192.0.2.40:3478"),
+			Target: netip.MustParseAddrPort("[2001:db8:d::1]:3478"),
 			Mapped: netip.MustParseAddrPort("[2001:db8::2]:51821"),
 			RTT:    47 * time.Millisecond,
 		},
@@ -464,5 +464,25 @@ func TestRender_WarningsAlwaysArray(t *testing.T) {
 	}
 	if !bytes.Contains(buf.Bytes(), []byte(`"warnings": []`)) {
 		t.Errorf("expected empty warnings array, got: %s", buf.String())
+	}
+}
+
+func TestRender_HidesUnsentFamily(t *testing.T) {
+	a := probe.Server{Host: "stun.example.org", Port: 3478}
+	b := probe.Server{Host: "stun.example.net", Port: 3478}
+	probes := []probe.Result{
+		{Server: a, Target: netip.MustParseAddrPort("192.0.2.10:3478"), Mapped: netip.MustParseAddrPort("198.51.100.1:40000"), RTT: 10 * time.Millisecond},
+		{Server: a, Err: errors.New("write a: network is unreachable")},
+		{Server: b, Err: errors.New("write b: network is unreachable")},
+	}
+	v := classify.Verdict{Type: classify.Unknown, Forecast: classify.Forecast{DirectP2P: "unknown"}}
+
+	human := renderToBytes(t, v, probes, nil, FormatHuman)
+	if bytes.Contains(human, []byte("write a")) || !bytes.Contains(human, []byte("write b")) {
+		t.Errorf("human output must hide only the row whose server sent in another family:\n%s", human)
+	}
+	j := renderToBytes(t, v, probes, nil, FormatJSON)
+	if !bytes.Contains(j, []byte("write a")) || !bytes.Contains(j, []byte("write b")) {
+		t.Errorf("JSON must keep every row:\n%s", j)
 	}
 }

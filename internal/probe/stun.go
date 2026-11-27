@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -30,27 +31,28 @@ func NewSTUNWithResolver(lookup Resolver) Prober {
 
 type stunProber struct{ lookup Resolver }
 
-// ProbeAll sends one STUN Binding request to each server, concurrently, and
-// returns results in input order. Servers in the same address family share one
-// local socket: mapped endpoints are only comparable when they come from the
-// same local endpoint. Unanswered requests are retransmitted on the
+// ProbeAll sends one STUN Binding request to each server in each address
+// family it resolves to, concurrently, and returns results in input order,
+// IPv4 before IPv6 within a server (TestProbe_EachFamilyOnItsOwn). Servers in the same address family share
+// one local socket: mapped endpoints are only comparable when they come from
+// the same local endpoint. Unanswered requests are retransmitted on the
 // retransmitGaps schedule. ctx bounds the whole run.
 func (p stunProber) ProbeAll(ctx context.Context, servers []Server) []Result {
 	run := newMappingRun()
 	run.lookup = p.lookup
 	defer run.close()
 
-	results := make([]Result, len(servers))
+	perServer := make([][]Result, len(servers))
 	var wg sync.WaitGroup
 	for i, s := range servers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = run.probe(ctx, s)
+			perServer[i] = run.probe(ctx, s)
 		}()
 	}
 	wg.Wait()
-	return results
+	return slices.Concat(perServer...)
 }
 
 const readErrorPause = 10 * time.Millisecond
@@ -126,18 +128,38 @@ func (r *mappingRun) close() {
 	r.readers.Wait()
 }
 
-func (r *mappingRun) probe(ctx context.Context, s Server) Result {
+// probe returns one Result per address family s resolves to, IPv4 first
+// (TestProbe_EachFamilyOnItsOwn), or one Result carrying the error when s is
+// invalid or does not resolve.
+func (r *mappingRun) probe(ctx context.Context, s Server) []Result {
 	if s.Host == "" || s.Port <= 0 || s.Port > 65535 {
-		return Result{Server: s, Err: fmt.Errorf("invalid server %q:%d", s.Host, s.Port)}
+		return []Result{{Server: s, Err: fmt.Errorf("invalid server %q:%d", s.Host, s.Port)}}
 	}
 	ips, err := resolveHost(ctx, r.lookup, s.Host)
 	if err != nil {
-		return Result{Server: s, Err: fmt.Errorf("resolve %s: %w", s.Host, err)}
+		return []Result{{Server: s, Err: fmt.Errorf("resolve %s: %w", s.Host, err)}}
 	}
 	if len(ips) == 0 {
-		return Result{Server: s, Err: fmt.Errorf("resolve %s: no addresses", s.Host)}
+		return []Result{{Server: s, Err: fmt.Errorf("resolve %s: no addresses", s.Host)}}
 	}
-	return r.probeAddrs(ctx, s, ips)
+	var families [][]netip.Addr
+	for _, is4 := range []bool{true, false} {
+		f := slices.DeleteFunc(slices.Clone(ips), func(ip netip.Addr) bool { return ip.Unmap().Is4() != is4 })
+		if len(f) > 0 {
+			families = append(families, f)
+		}
+	}
+	results := make([]Result, len(families))
+	var wg sync.WaitGroup
+	for i, f := range families {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = r.probeAddrs(ctx, s, f)
+		}()
+	}
+	wg.Wait()
+	return results
 }
 
 // resolveHost keeps the zone of a literal address. LookupNetIP strips it, and a
@@ -149,9 +171,8 @@ func resolveHost(ctx context.Context, lookup Resolver, host string) ([]netip.Add
 	return lookup(ctx, "ip", host)
 }
 
-// probeAddrs uses the first address that accepts a send. A host with an AAAA
-// record and no IPv6 route fails here at write time and falls through to its
-// A record, which is the fallback a connected UDP dial would have given.
+// probeAddrs uses the first of ips, all in one address family, that accepts a
+// send (TestProbeAddrs_FallsThroughWithinFamily).
 func (r *mappingRun) probeAddrs(ctx context.Context, s Server, ips []netip.Addr) Result {
 	res := Result{Server: s}
 	var tx *transaction

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -57,6 +59,16 @@ func warningText(id string) string {
 	}
 }
 
+// unsentBesideSent reports whether p's request never left the host while the
+// same server's request in another address family did. The JSON report keeps
+// such rows; here they would print on every healthy single-family run
+// (TestRender_HidesUnsentFamily).
+func unsentBesideSent(p probe.Result, probes []probe.Result) bool {
+	return !p.Target.IsValid() && slices.ContainsFunc(probes, func(q probe.Result) bool {
+		return q.Server == p.Server && q.Target.IsValid()
+	})
+}
+
 func serverStr(s probe.Server) string {
 	return net.JoinHostPort(s.Host, strconv.Itoa(s.Port))
 }
@@ -81,12 +93,16 @@ func renderHuman(w io.Writer, v classify.Verdict, probes []probe.Result) error {
 		fmt.Fprintf(&b, "Hairpinning: %t\n", *v.Hairpinning)
 	}
 
+	probes = slices.DeleteFunc(slices.Clone(probes), func(p probe.Result) bool { return unsentBesideSent(p, probes) })
 	if len(probes) > 0 {
 		srvs := make([]string, len(probes))
 		rtts := make([]string, len(probes))
 		maxSrv, maxRTT := 0, 0
 		for i, p := range probes {
 			srvs[i] = serverStr(p.Server)
+			if _, err := netip.ParseAddr(p.Server.Host); err != nil && p.Target.IsValid() {
+				srvs[i] += " (" + p.Target.Addr().String() + ")"
+			}
 			if n := len(srvs[i]); n > maxSrv {
 				maxSrv = n
 			}

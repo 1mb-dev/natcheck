@@ -5,11 +5,13 @@
   "probes": [
     {
       "server": "stun.l.google.com:19302",
+      "target": "192.0.2.10:19302",
       "rtt_ms": 24,
       "mapped": "203.0.113.45:51820"
     },
     {
       "server": "stun.cloudflare.com:3478",
+      "target": "192.0.2.20:3478",
       "rtt_ms": 31,
       "mapped": "203.0.113.45:51820"
     }
