@@ -4,39 +4,44 @@ All notable changes to this project are documented here. Format follows [Keep a 
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-28
+
 ### Read this first
 
-- A hostname `--server` is probed in each address family it resolves to, and the verdict follows IPv4 ([`docs/design.md` § Address families](docs/design.md#address-families)). On a dual-stack host whose IPv4 NAT is symmetric, a run that read `possible` and exited 0 now reads `unlikely` and exits 1; a run where IPv4 requests left and no probe mapped to IPv4 now reads `Blocked` and exits 2. The IPv6 verdict is under `address_families.ipv6` (#42).
+- A default run, or any run with a hostname `--server`, probes each address family the server name resolves to, and the verdict follows IPv4 ([`docs/design.md` § Address families](docs/design.md#address-families)). On a dual-stack host whose IPv4 NAT is symmetric, a run that read `possible` and exited 0 now reads `unlikely` and exits 1; a run where IPv4 requests left and no probe mapped to IPv4 now reads `Blocked` and exits 2. The IPv6 verdict is under `address_families.ipv6` (#42).
+- `probes[]` has one entry per server per address family, so on an IPv4-only host `--json` can carry, per server, an error entry without `target` for the IPv6 request that could not be sent; human output hides it. `public_endpoint` is IPv4's when IPv4 answered (#42).
+- `nat_type` can read `APDM` (#41).
 - Warning `mixed_address_family_probes` is retired; `address_families_disagree` fires when the families' forecasts differ (#42).
-- `probes[]` has one entry per server per address family, and `public_endpoint` is IPv4's when IPv4 answered (#42).
 
 ### Added
 
 - JSON `address_families` object with each family's verdict, forecast, filtering and warnings, and `target` on each probe (#42).
-- Warning `no_nat` when every successful probe of an address family maps to this host's own address and the port it left from; the NAT type and forecast are unchanged (#39).
-- RFC 5780 §4.3 Tests II and III, run after the filtering tests when `OTHER-ADDRESS` passes the checks in [`docs/design.md` § Mapping tests](docs/design.md#mapping-tests-rfc-5780-43) (#41).
+- Warning `no_nat` when nothing on an address family's path translated its probes ([`docs/design.md` § RFC 5780 mapping classification](docs/design.md#rfc-5780-mapping-classification)); the NAT type and forecast are unchanged (#39).
+- RFC 5780 §4.3 Tests II and III, run after the filtering tests when `OTHER-ADDRESS` passes the checks in [`docs/design.md` § Mapping tests](docs/design.md#mapping-tests-rfc-5780-43); `--timeout` help states the longest the RFC 5780 tests can add, 3.75s (#41).
 
 ### Changed
 
 - Filtering and Tests II and III run in each address family whose probes found a server advertising `OTHER-ADDRESS` (#42).
-- An ADM verdict reads `APDM` when Tests II and III map differently, and drops `adm_or_stricter` either way, if both replied and Test II mapped differently from Test 1 (#41).
-- An address family that sends and gets no reply holds the run to `--timeout` ([`docs/design.md` § Concurrency model](docs/design.md#concurrency-model)) (#42).
+- An ADM verdict reads `APDM`, or stays ADM without `adm_or_stricter`, when Tests II and III settle it ([`docs/design.md` § Mapping tests](docs/design.md#mapping-tests-rfc-5780-43)) (#41).
+- A run where one address family sends and hears nothing now waits the full `--timeout` even when the other family answered ([`docs/design.md` § Concurrency model](docs/design.md#concurrency-model)) (#42).
 - Hairpinning tries the first `--server`'s IPv4 address first, so on a dual-stack host it covers IPv4 instead of IPv6 (#42).
-- `ipv4_untested` reads "No IPv4 probe succeeded; this verdict covers IPv6 only." (#42).
-- `insufficient_server_diversity` text covers either address family (#42).
+- Human output adds to each probe of a hostname server the address it was sent to and, when both address families are present ([`docs/design.md` § Address families](docs/design.md#address-families)), prints an `IPv4:` and an `IPv6:` line; `ipv4_untested` reads "No IPv4 probe succeeded; this verdict covers IPv6 only." and `insufficient_server_diversity` covers either family (#42).
 - `cgnat_detected` text says the server sits inside a carrier or overlay network and the NAT beyond it is not measured; forecast and exit code are unchanged (#53).
 - Go 1.26.3 is the minimum version.
 
 ### Fixed
 
-- Hairpinning reads `null` with `hairpin_untested`, not `false`, when `--timeout` ends before its listen does; the listen is capped at two thirds of the time `--timeout` leaves after DNS (#48).
-- Filtering tests resend the same request at 500ms when `--timeout` is above 1s; at the default, a lost packet still reads as filtering when the resend's reply takes more than 250ms (#43).
+- Hairpinning reads `null` with `hairpin_untested`, not `false`, when `--timeout` ends before its listen does, and the listen is sized to fit `--timeout` ([`docs/design.md` § Hairpinning detection](docs/design.md#hairpinning-detection)) (#48).
+- Filtering tests resend an unanswered request when their window allows, so one lost packet no longer reads as filtering if the resend's reply arrives in time ([`docs/design.md` § Filtering classification](docs/design.md#filtering-classification)) (#43).
 - A mapping probe that gets no reply but a packet from the server's address that does not decode as STUN now reads `undecodable reply from <address>` instead of `no response from <address>` (#45).
 - When no probe gets a usable mapping but a server replies to a request, such as with an error response or a success with no mapped address, `direct_p2p` reads `unknown` instead of `unlikely` and `turn_required` reads `false` instead of `true`; the exit code stays 2 (#49).
 - A filtering or hairpinning read that fails for any reason but its deadline no longer counts as no reply: filtering stays untested instead of reading stricter, and hairpinning reads `null` with `hairpin_untested` instead of `false`.
 - A filtering CHANGE-REQUEST that fails to send now warns `filtering_behavior_not_tested` instead of `filtering_skipped_no_change_request`.
-- `--timeout` help states the longest the RFC 5780 tests can add, 3.75s, instead of 1.5s.
 - The hairpin tag goes only to a mapped endpoint that passes the family, scope and never-block checks in [`docs/design.md` § Mapping tests](docs/design.md#mapping-tests-rfc-5780-43); otherwise hairpinning reads `null` with `hairpin_untested`.
+
+### Validation
+
+Checked in a local Docker lab with coturn behind Linux netfilter NAT, now in both address families with servers named by hostname, and on a residential dual-stack network. The lab has no consumer router, and the residential network's gateway was not identified. See [`docs/validation-log.md`](docs/validation-log.md).
 
 ## [0.1.6] — 2026-11-26
 
@@ -211,7 +216,8 @@ Initial release. See [`docs/design.md`](docs/design.md) for scope and architectu
 - Go 1.25+
 - [`github.com/pion/stun/v3`](https://github.com/pion/stun)
 
-[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/1mb-dev/natcheck/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/1mb-dev/natcheck/releases/tag/v0.2.0
 [0.1.6]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.6
 [0.1.5]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.5
 [0.1.4]: https://github.com/1mb-dev/natcheck/releases/tag/v0.1.4
