@@ -11,8 +11,10 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/1mb-dev/natcheck/internal/classify"
@@ -102,22 +104,32 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober p
 		}
 	}
 
-	// Capability detection: pick the first server whose mapping probe observed
-	// OTHER-ADDRESS, then run ProbeFiltering against it. Default servers
-	// (Google/Cloudflare) don't advertise OTHER-ADDRESS, so filtering is
-	// skipped and adds zero latency for default-server users.
-	var filteringResult *probe.FilteringResult
-	for _, r := range results {
-		if r.Err == nil && r.Other.IsValid() {
-			budget := opts.timeout
-			if budget > filteringTimeoutCap {
-				budget = filteringTimeoutCap
-			}
-			res := filterer(r.Server, r.Target, budget)
-			filteringResult = &res
-			break
+	// Capability detection: in each address family, pick the first compared
+	// probe that observed OTHER-ADDRESS and run ProbeFiltering against its
+	// server (TestRun_FilteringUsesComparedRows); the two families run
+	// concurrently (TestRun_FilteringRunsInEachFamily).
+	// Default servers (Google/Cloudflare) don't advertise OTHER-ADDRESS, so
+	// filtering is skipped and adds zero latency for default-server users.
+	var filtering classify.Filtering
+	var wg sync.WaitGroup
+	for _, slot := range []struct {
+		is4 bool
+		res **probe.FilteringResult
+	}{{true, &filtering.IPv4}, {false, &filtering.IPv6}} {
+		fam := classify.Compared(results, slot.is4)
+		i := slices.IndexFunc(fam, func(r probe.Result) bool { return r.Other.IsValid() })
+		if i < 0 {
+			continue
 		}
+		budget := min(opts.timeout, filteringTimeoutCap)
+		wg.Add(1)
+		go func(r probe.Result) {
+			defer wg.Done()
+			res := filterer(r.Server, r.Target, budget)
+			*slot.res = &res
+		}(fam[i])
 	}
+	wg.Wait()
 
 	var hairpinningResult *probe.HairpinningResult
 	if hairpinCh != nil {
@@ -125,7 +137,7 @@ func runWith(ctx context.Context, args []string, out, errOut io.Writer, prober p
 		hairpinningResult = &h
 	}
 
-	verdict := classify.Classify(results, filteringResult, hairpinningResult)
+	verdict := classify.Classify(results, filtering, hairpinningResult)
 
 	format := report.FormatHuman
 	if opts.json {
@@ -155,12 +167,16 @@ func exitCode(v classify.Verdict) int {
 
 func logProbe(w io.Writer, r probe.Result) {
 	addr := net.JoinHostPort(r.Server.Host, strconv.Itoa(r.Server.Port))
+	target := ""
+	if r.Target.IsValid() {
+		target = fmt.Sprintf(" target=%s", r.Target)
+	}
 	if r.Err != nil {
-		_, _ = fmt.Fprintf(w, "probe %s: error: %v\n", addr, r.Err)
+		_, _ = fmt.Fprintf(w, "probe %s:%s error: %v\n", addr, target, r.Err)
 		return
 	}
-	_, _ = fmt.Fprintf(w, "probe %s: rtt=%s mapped=%s\n",
-		addr, r.RTT.Round(time.Millisecond), r.Mapped)
+	_, _ = fmt.Fprintf(w, "probe %s:%s rtt=%s mapped=%s\n",
+		addr, target, r.RTT.Round(time.Millisecond), r.Mapped)
 }
 
 // options is the parsed flag state.

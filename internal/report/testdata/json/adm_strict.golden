@@ -26,5 +26,23 @@
   "filtering": {
     "behavior": "untested"
   },
-  "hairpinning": null
+  "hairpinning": null,
+  "address_families": {
+    "ipv4": {
+      "nat_type": "ADM",
+      "nat_type_legacy": "symmetric",
+      "public_endpoint": "203.0.113.45:51820",
+      "webrtc_forecast": {
+        "direct_p2p": "unlikely",
+        "turn_required": true
+      },
+      "filtering": {
+        "behavior": "untested"
+      },
+      "warnings": [
+        "filtering_behavior_not_tested",
+        "adm_or_stricter"
+      ]
+    }
+  }
 }

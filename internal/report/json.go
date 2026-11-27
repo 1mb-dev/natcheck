@@ -9,10 +9,12 @@ import (
 	"github.com/1mb-dev/natcheck/internal/probe"
 )
 
-// probeJSON is the per-probe shape in the JSON report. rtt_ms / mapped are
-// omitted for failed probes; error is omitted for successful ones.
+// probeJSON is the per-probe shape in the JSON report. target is omitted when
+// no request was sent; rtt_ms / mapped are omitted for failed probes; error is
+// omitted for successful ones.
 type probeJSON struct {
 	Server string `json:"server"`
+	Target string `json:"target,omitempty"`
 	RTTMs  int64  `json:"rtt_ms,omitempty"`
 	Mapped string `json:"mapped,omitempty"`
 	Error  string `json:"error,omitempty"`
@@ -39,9 +41,53 @@ type reportJSON struct {
 	Warnings       []string      `json:"warnings"`
 	Filtering      filteringJSON `json:"filtering"`
 	// Hairpinning is tri-state per docs/design.md: true / false / null.
-	// null distinguishes "didn't try" from "tested false". Always null until
-	// the probe path lands; see todos/releases/v0.1.4/phase-4-hairpinning.md.
+	// null distinguishes "didn't try" from "tested false".
 	Hairpinning *bool `json:"hairpinning"`
+	// AddressFamilies holds each family's own verdict; a family is omitted
+	// when absent (docs/design.md § Address families, TestRender_Golden).
+	AddressFamilies familiesJSON `json:"address_families"`
+}
+
+type familiesJSON struct {
+	IPv4 *familyJSON `json:"ipv4,omitempty"`
+	IPv6 *familyJSON `json:"ipv6,omitempty"`
+}
+
+type familyJSON struct {
+	NATType        string        `json:"nat_type"`
+	NATTypeLegacy  string        `json:"nat_type_legacy"`
+	PublicEndpoint string        `json:"public_endpoint"`
+	WebRTCForecast forecastJSON  `json:"webrtc_forecast"`
+	Filtering      filteringJSON `json:"filtering"`
+	Warnings       []string      `json:"warnings"`
+}
+
+func familyToJSON(v *classify.Verdict) *familyJSON {
+	if v == nil {
+		return nil
+	}
+	f := &familyJSON{
+		NATType:        natTypeAbbrev(v.Type),
+		NATTypeLegacy:  v.LegacyName,
+		WebRTCForecast: forecastJSON{DirectP2P: v.Forecast.DirectP2P, TURNRequired: v.Forecast.TURNRequired},
+		Filtering:      filteringToJSON(*v),
+		Warnings:       v.Warnings,
+	}
+	if v.PublicEndpoint.IsValid() {
+		f.PublicEndpoint = v.PublicEndpoint.String()
+	}
+	if f.Warnings == nil {
+		f.Warnings = []string{}
+	}
+	return f
+}
+
+func filteringToJSON(v classify.Verdict) filteringJSON {
+	f := filteringJSON{Behavior: v.Filtering.String()}
+	if v.Filtering != classify.FilteringUntested && v.FilteringTestedAgainst.Host != "" {
+		f.TestedAgainst = serverStr(v.FilteringTestedAgainst)
+	}
+	return f
 }
 
 // natTypeAbbrev is the stable JSON short name for a classify.NATType.
@@ -68,15 +114,13 @@ func renderJSON(w io.Writer, v classify.Verdict, probes []probe.Result) error {
 			DirectP2P:    v.Forecast.DirectP2P,
 			TURNRequired: v.Forecast.TURNRequired,
 		},
-		Warnings:  v.Warnings,
-		Probes:    make([]probeJSON, len(probes)),
-		Filtering: filteringJSON{Behavior: v.Filtering.String()},
+		Warnings:        v.Warnings,
+		Probes:          make([]probeJSON, len(probes)),
+		Filtering:       filteringToJSON(v),
+		AddressFamilies: familiesJSON{IPv4: familyToJSON(v.IPv4), IPv6: familyToJSON(v.IPv6)},
 	}
 	if v.PublicEndpoint.IsValid() {
 		r.PublicEndpoint = v.PublicEndpoint.String()
-	}
-	if v.Filtering != classify.FilteringUntested && v.FilteringTestedAgainst.Host != "" {
-		r.Filtering.TestedAgainst = serverStr(v.FilteringTestedAgainst)
 	}
 	if v.Hairpinning != nil {
 		h := *v.Hairpinning
@@ -89,6 +133,9 @@ func renderJSON(w io.Writer, v classify.Verdict, probes []probe.Result) error {
 
 	for i, p := range probes {
 		pj := probeJSON{Server: serverStr(p.Server)}
+		if p.Target.IsValid() {
+			pj.Target = p.Target.String()
+		}
 		if p.Err != nil {
 			pj.Error = p.Err.Error()
 		} else {

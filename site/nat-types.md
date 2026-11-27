@@ -92,7 +92,7 @@ Filtering not tested.
 
 Filtering classification (RFC 5780 §4.4) activates automatically when `--server` points at a server that advertises `OTHER-ADDRESS` — coturn does, the public defaults don't. See [coturn setup](https://github.com/1mb-dev/natcheck/blob/main/docs/coturn-setup.md) for a one-page recipe.
 
-Behind a carrier NAT, natcheck's verdict covers the carrier's NAT. An address family's first mapped address in `100.64.0.0/10`, from a `--server` inside a carrier or overlay network, gives forecast `unknown`: the NAT beyond that server was not measured.
+Behind a carrier NAT, natcheck's verdict covers the carrier's NAT. An address family's first mapped address in `100.64.0.0/10`, from a `--server` inside a carrier or overlay network, gives that family forecast `unknown`: the NAT beyond that server was not measured.
 
 ## Hairpinning
 

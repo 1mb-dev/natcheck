@@ -7,5 +7,5 @@ Probes:
   192.0.2.10:3479  rtt=25ms  mapped=203.0.113.45:51820
 
 Filtering not tested.
-Servers share one IP, which cannot show mapping behavior. Use --server values on two different IPs.
+Servers share one IP in one or more address families, which cannot show mapping behavior. Use --server values on two different IPs.
 Hairpinning not tested (local socket setup, STUN probe or listen read failed, the server reported a mapped address natcheck does not send to, or --timeout ran out).

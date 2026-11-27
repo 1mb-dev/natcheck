@@ -1,9 +1,9 @@
 # natcheck — Architecture
 
-> Status: v0.1.6 shipped. v0.2 design contract is the addendum at end of document.
-> Last updated: 2026-11-26
+> Status: v0.1.6 shipped.
+> Last updated: 2026-11-27
 
-Product framing and technical spec. v0.1 spec lives in this document as shipped; v0.2 design is the addendum at the end.
+Product framing and technical spec, as shipped. The v0.2 part at the end covers RFC 5780 filtering and mapping tests, hairpinning and the schema they added.
 
 ## Problem
 
@@ -49,12 +49,13 @@ In:
 - `--version`, `--help`
 - WebRTC forecast: `likely | possible | unlikely | unknown`. `likely` needs measured endpoint-independent filtering; EIM otherwise reads `possible`
 - Warning `cgnat_detected` when an address family's first mapped address is in 100.64.0.0/10 (a server inside a carrier or overlay network)
+- Both address families probed; the verdict follows IPv4 (see Address families)
 - Exit codes: 0 (P2P-friendly), 1 (P2P-hostile), 2 (probe error)
 
 Out of scope:
 
 - TURN probing
-- IPv6 exhaustive testing (works in practice via `pion/stun` + Go's net package when available, but not a tested contract)
+- IPv6-specific translation (NPTv6, NAT64) as categories of their own
 - Multi-interface enumeration
 - Continuous monitoring / watch mode
 - TUI
@@ -93,8 +94,8 @@ Forecast leads the output so the WebRTC-dev persona gets the answer on line 1. C
   "nat_type_legacy": "cone",
   "public_endpoint": "203.0.113.45:51820",
   "probes": [
-    {"server": "stun.l.google.com:19302", "rtt_ms": 24, "mapped": "203.0.113.45:51820"},
-    {"server": "stun.cloudflare.com:3478", "rtt_ms": 31, "mapped": "203.0.113.45:51820"}
+    {"server": "stun.l.google.com:19302", "target": "192.0.2.10:19302", "rtt_ms": 24, "mapped": "203.0.113.45:51820"},
+    {"server": "stun.cloudflare.com:3478", "target": "192.0.2.20:3478", "rtt_ms": 31, "mapped": "203.0.113.45:51820"}
   ],
   "webrtc_forecast": {"direct_p2p": "possible", "turn_required": false},
   "warnings": ["filtering_behavior_not_tested"]
@@ -108,7 +109,8 @@ The JSON schema is a public contract from v0.1 onward; only additive changes aft
 - All probes fail → exit 2, report per-server errors. Forecast `unknown` with `turn_required: false` when a server replied to a request without a usable mapping (such as an error response, or a success with no mapped address); otherwise `turn_required: true`, with `unlikely` when a request left the host and `unknown` when none did (`TestClassify`)
 - A mapping probe that gets no reply but, before its deadline, a packet from the server's address that does not decode reads `undecodable reply from <address>`, not `no response`; that packet does not set `Replied` or change the forecast (`TestProbe_GarbledResponse`, `TestProbe_GarbledThenValidReplySucceeds`, `TestProbe_RepliedWithoutMapping`)
 - Mapped endpoints disagree across servers → NAT type "Address-Dependent Mapping" with warning `adm_or_stricter`, or ADM or APDM without the warning when RFC 5780 Tests II and III refine it (see Mapping tests; `TestClassify_MappingTest`); exit 1, forecast `unlikely`
-- An address family's first mapped address in `100.64.0.0/10` (a server inside a carrier or overlay network) → warning `cgnat_detected`, forecast `unknown`
+- IPv4 requests leave and no probe maps to IPv4 while IPv6 answers → the IPv4 family is Blocked and decides, exit 2 (see Address families)
+- An address family's first mapped address in `100.64.0.0/10` (a server inside a carrier or overlay network) → warning `cgnat_detected`, forecast `unknown` for that family
 
 ## Architecture
 
@@ -182,12 +184,14 @@ type Result struct {
     Err          error          // nil on success
 }
 
+// One Result per server per address family it resolves to, IPv4 first,
+// in input order (TestProbe_EachFamilyOnItsOwn).
 type Prober interface {
     ProbeAll(ctx context.Context, servers []Server) []Result
 }
 ```
 
-One `Prober` implementation: `stunProber` using `pion/stun` primitives (`Build`/`Decode`) over raw UDP. Servers in one address family share one local socket, because mapped endpoints are only comparable from the same local endpoint. Requests go out concurrently and replies are matched by source and transaction ID; anything else is dropped. Unanswered requests are retransmitted at 0.5, 1.5 and 3.5s under the `ctx` deadline. Failures return a `Result` with non-nil `Err`; callers never panic.
+One `Prober` implementation: `stunProber` using `pion/stun` primitives (`Build`/`Decode`) over raw UDP. A hostname is probed once per address family it resolves to, from the first address of that family that accepts a send (`TestProbe_EachFamilyOnItsOwn`, `TestProbeAddrs_FallsThroughWithinFamily`). Servers in one address family share one local socket, because mapped endpoints are only comparable from the same local endpoint. Requests go out concurrently and replies are matched by source and transaction ID; anything else is dropped. Unanswered requests are retransmitted at 0.5, 1.5 and 3.5s under the `ctx` deadline. Failures return a `Result` with non-nil `Err`; callers never panic.
 
 ### `internal/classify`
 
@@ -210,6 +214,7 @@ type Verdict struct {
     FilteringTested bool      // false in v0.1 always
     Warnings        []string
     Forecast        Forecast
+    IPv4, IPv6      *Verdict  // per-family verdicts; nil when absent (see Address families)
 }
 
 type Forecast struct {
@@ -217,7 +222,7 @@ type Forecast struct {
     TURNRequired bool
 }
 
-func Classify(results []probe.Result) Verdict
+func Classify(results []probe.Result, filtering Filtering, hairpinning *probe.HairpinningResult) Verdict
 ```
 
 Pure function. No I/O. Table-driven tests cover RFC 5780 classification boundaries, CGNAT detection, and the partial-failure matrix (0/N, 1/N both orderings, N/N probes successful).
@@ -250,7 +255,7 @@ type Options struct {
 func Run(ctx context.Context, args []string, out, errOut io.Writer) int
 ```
 
-Returns exit code. Parses flags, defaults servers, runs probes concurrently (one goroutine per server, bounded by timeout), calls `Classify`, calls `Render`. Testable in-process with a fake `Prober`.
+Returns exit code. Parses flags, defaults servers, runs probes concurrently (one goroutine per server per address family, bounded by timeout), calls `Classify`, calls `Render`. Testable in-process with a fake `Prober`.
 
 ## Default STUN servers
 
@@ -271,13 +276,21 @@ With only basic STUN Binding responses (no `CHANGE-REQUEST`), we can determine:
 
 Mappings that agree across fewer than two server IPs read `Unknown` with warning `insufficient_server_diversity`: one IP cannot separate EIM from ADM.
 
-When every successful probe, in every address family, maps to one of this host's interface addresses with the port it left from, the warning `no_nat` reports that nothing on the path translated it. One probe is enough. The type, legacy name and forecast stay those of the mapping (`TestClassify_NoNAT`, `TestProbe_Untranslated`, `TestRun_MappingBehaviorOverRealSockets`).
+When every successful probe of an address family maps to one of this host's interface addresses with the port it left from, the warning `no_nat` reports that nothing on that family's path translated it. One probe is enough. The type, legacy name and forecast stay those of the mapping (`TestClassify_NoNAT`, `TestProbe_Untranslated`, `TestRun_MappingBehaviorOverRealSockets`).
 
 Filtering needs `CHANGE-REQUEST`, covered below.
 
+## Address families
+
+Probes are grouped by the family of their mapped address, and each family gets its own verdict, filtering result, mapping tests and warnings, reported under `address_families` (`TestClassify_AddressFamilies`, `TestRun_DualStackHostnameProbesBothFamilies`). A family's mappings are compared only among probes sent from one socket: a probe sent from the other family's socket, as through NAT64, counts only when no probe from the family's own socket got a mapping (`TestClassify_AddressFamilies`). Filtering runs in each family on the first compared probe whose server advertised `OTHER-ADDRESS` (`TestRun_FilteringUsesComparedRows`), both families at once (`TestRun_FilteringRunsInEachFamily`).
+
+The top-level verdict is IPv4's: a peer without IPv6 depends on it. IPv6's verdict is the top level only when IPv4 is absent, with warning `ipv4_untested`. IPv4 is absent when no probe mapped to IPv4 and no IPv4 request left the host. When no probe mapped to IPv4 but IPv4 requests left the host, the IPv4 family is Blocked and decides as in an IPv4-only run. An IPv6 family whose requests got no mapping is absent (`TestClassify_AddressFamilies`).
+
+When both families are present and their forecasts differ, warning `address_families_disagree` names both. The top level carries the deciding family's filtering warnings and `adm_or_stricter`, `insufficient_probes`, `insufficient_server_diversity` and `cgnat_detected` from either family, and `no_nat` when every present family has it (`TestClassify_AddressFamilies`).
+
 ## CGNAT detection
 
-When an address family's first mapped address is in `100.64.0.0/10` (RFC 6598 shared address space), the server sits inside a carrier or overlay network, such as a tailnet. The request never crossed the NAT between that network and the internet, which is the one peers see, so natcheck emits warning `cgnat_detected` and forecasts `unknown` (`TestClassify`).
+When an address family's first mapped address is in `100.64.0.0/10` (RFC 6598 shared address space), the server sits inside a carrier or overlay network, such as a tailnet. The request never crossed the NAT between that network and the internet, which is the one peers see, so natcheck emits warning `cgnat_detected` and forecasts `unknown` for that family (`TestClassify`).
 
 Against public servers this does not fire: a carrier NAT translates the range before the request leaves the carrier. Behind a carrier NAT the probes cross it, so the mapping verdict covers every NAT on the path, the carrier's included (`TestRun_MappingBehaviorOverRealSockets`, the chained NAT cases).
 
@@ -287,7 +300,7 @@ A server on a private network (RFC 1918, ULA) has the same blind spot and is not
 
 ## Concurrency model
 
-Probes run concurrently under a single context timeout, one socket per address family with one reader per socket. If the timeout fires, unanswered probes are recorded as errors. `Classify` waits for all probes (success or error) before running.
+Probes run concurrently under a single context timeout, one goroutine per server per address family and one socket per address family with one reader per socket. If the timeout fires, unanswered probes are recorded as errors, so an address family that sends and hears nothing holds the run to `--timeout` (`TestProbe_SilentFamilyHoldsTheRun`). `Classify` waits for all probes (success or error) before running.
 
 ## Testing strategy
 
@@ -322,29 +335,25 @@ No live-network test in CI. Manual verification against real networks before rel
 
 ---
 
-# v0.2 design (addendum)
+# v0.2 design
 
-> Added: 2026-04-26
-> Status: design contract. Implementation staged across v0.1.x patches to v0.2.0.
+> Added: 2026-04-26.
 
 ## Goal
 
 RFC 5780 parity with `pion/stun-nat-behaviour` on protocol rigor while preserving the v0.1 UX contract: one command, pinned JSON, honest CGNAT handling, layered exit codes.
 
-## Staged sequence
+## How it shipped
 
-v0.2 is a milestone reached via bisectable patches, not a single release. Each patch is independently shippable with real user value.
-
-| Patch | Status | Adds |
-|---|---|---|
-| **v0.1.2** | shipped (PRs #7–#11, tag `v0.1.2`) | RFC 5780 §4.4 filtering classification (capability-driven via `--server` advertising `OTHER-ADDRESS`); JSON `filtering` object; classifier upgrade emitting reserved `possible`; coturn reference config asset + setup doc; `internal/stunserver` foundation package |
-| **v0.1.2.x** | shipped (tags `v0.1.2.1`, `v0.1.2.2`) | coturn config + setup doc fixes so v0.1.2's filtering classification works on more provider topologies; `scripts/validate-coturn.sh` provisioner. No code or schema delta. (4-segment tags incompatible with Go module versioning — see those releases' notes; lesson recorded.) |
-| **v0.1.3** | shipped (tag `v0.1.3`) | Cross-address-family mapping classification fix (#14): per-family grouping + combine. New `mixed_address_family_probes` warning. Hairpinning shifts to v0.1.4. |
-| **v0.1.4** | shipped (tag `v0.1.4`) | Hairpinning detection via two local sockets, parallel with mapping probes; JSON `hairpinning` field |
-| **v0.1.5** | shipped (tag `v0.1.5`) | Mapping measured from one socket per address family (#28), server-diversity guard, filtering source checks, mapping retransmission. |
-| **v0.2.0** | planned | Version bump; README + site copy reconciliation; CHANGELOG with v0.1 → v0.2 JSON migration section |
-
-v0.2.0 is the line where downstream consumers can rely on the new schema fields.
+| Release | Adds |
+|---|---|
+| **v0.1.2** | RFC 5780 §4.4 filtering classification (capability-driven via `--server` advertising `OTHER-ADDRESS`); JSON `filtering` object; `possible` forecast; coturn reference config and setup doc; `internal/stunserver` package |
+| **v0.1.2.x** | coturn config and setup doc fixes; `scripts/validate-coturn.sh`. No code or schema change. (4-segment tags are incompatible with Go module versioning; see those releases' notes.) |
+| **v0.1.3** | Per-family grouping of mapping probes (#14); warning `mixed_address_family_probes` (since retired) |
+| **v0.1.4** | Hairpinning detection via two local sockets, parallel with mapping probes; JSON `hairpinning` field |
+| **v0.1.5** | Mapping measured from one socket per address family (#28), server-diversity guard, filtering source checks, mapping retransmission |
+| **v0.1.6** | Filtering runs against the address the mapping probe reached; hairpinning falls through to the next resolved address; `unknown` forecast when no request left the host |
+| **Unreleased** | RFC 5780 §4.3 mapping tests; warning `no_nat`; both address families probed, verdict from IPv4, JSON `address_families`; timeout, retransmission and reply-handling fixes |
 
 ## JSON schema delta (additive only)
 
@@ -364,14 +373,21 @@ v0.2.0 is the line where downstream consumers can rely on the new schema fields.
     "tested_against": "stun.example.com:3478"
   },
 
-  // NEW in v0.1.3
-  "hairpinning": true | false | null
+  // NEW in v0.1.4
+  "hairpinning": true | false | null,
+
+  // NEW, unreleased; probes[] entries also gain "target", the address sent to
+  "address_families": {
+    "ipv4": { "nat_type", "nat_type_legacy", "public_endpoint", "webrtc_forecast", "filtering", "warnings" },
+    "ipv6": { ... }
+  }
 }
 ```
 
 - `filtering.tested_against` is omitted when `behavior == "untested"`.
 - `hairpinning: null` distinguishes "tested and false" from "didn't try."
-- Schema additivity discipline: once these fields ship, all future filtering / hairpinning fields nest under their respective objects or break the v0.1.2 / v0.1.3 contract.
+- A family is omitted from `address_families` when absent (see Address families).
+- Schema additivity discipline: new filtering fields go in the `filtering` objects, top level and per family; new per-family facts go in `address_families.<family>`.
 
 A v0.1-equivalent golden fixture (filtering=untested, hairpinning=null) is pinned as a regression check on the omitted-field path.
 
@@ -387,6 +403,7 @@ Verbose output emits coded warning constants in `warnings[]`:
 |---|---|
 | `WarnFilteringSkippedNoChangeRequest` | Server didn't advertise `OTHER-ADDRESS` |
 | `WarnHairpinUntested` | Hairpinning not measured; see Hairpinning detection |
+| `WarnAddressFamiliesDisagree` | The address families' forecasts differ; see Address families |
 
 No free-text warning strings.
 
@@ -418,14 +435,14 @@ After Tests 2 and 3, on the same socket, natcheck sends Test II to `OTHER-ADDRES
 
 These and the hairpin tag are the only packets sent to an address a server chose. Each is skipped unless that address has the family and scope of the server address it came from (loopback, link-local, private, public, or the same block of the IANA IPv4 and IPv6 Special-Purpose Address Registries, such as `100.64.0.0/10`), is not in a block natcheck never sends to (unspecified, limited broadcast, discard-only, IPv6 dummy, SRv6, and the NAT64, Teredo and 6to4 prefixes that embed an IPv4 address), and is in `2000::/3` when it is a public IPv6 address (`TestMappingTestAllowed`, `TestMappingTestAllowed_SpecialRanges`, `TestSpecialRanges_MatchIANARegistry`, `TestHairpinAddrs_MappedOutsideScopeSendsNothing`). Tests II and III also need a port other than the target's; on the target's port both tests would reach one endpoint (`TestMappingTestAllowed`). They are also skipped when `OTHER-ADDRESS` is inside a prefix of this host's interfaces (an IPv6 prefix longer than /64 widened to /64), or when the interface lookup fails (`TestProbeFiltering_MappingTestsSkipHostLink`).
 
-When both get a reply, Test II's mapping differs from Test 1's and the verdict is ADM, different Test II and III mappings make it APDM and equal ones leave ADM; either way `adm_or_stricter` is dropped. The tests never produce EIM and never replace Unknown, so one RFC 5780 server cannot stand in for two. Verdicts combine address families, so they refine one only when the other family's probes alone classify Unknown (`TestClassify_MappingTest`).
+When both get a reply, Test II's mapping differs from Test 1's and the verdict is ADM, different Test II and III mappings make it APDM and equal ones leave ADM; either way `adm_or_stricter` is dropped. The tests never produce EIM and never replace Unknown, so one RFC 5780 server cannot stand in for two. They refine the verdict of the address family they ran in (`TestClassify_MappingTest`).
 
 ## Hairpinning detection
 
 Two local UDP sockets, parallel with mapping probes (≤200ms parallel cost in the common case — two extra STUN round-trips executed concurrently with the mapping probes; bounded by `hairpinTimeoutCap` in `internal/cli`):
 
 1. Allocate sockets A and B.
-2. STUN-probe each in parallel against the first `--server` entry to obtain mapped endpoints `mA`, `mB`.
+2. STUN-probe each in parallel against the first `--server` entry, its IPv4 address first, to obtain mapped endpoints `mA`, `mB`. The result covers the family of the address used (`TestHairpinAddrs_TriesIPv4First`).
 3. From A, send a uniquely-tagged UDP packet to `mB`.
 4. Listen on B for `T_hairpin`: 1s, or two thirds of the time `--timeout` leaves after DNS when that is shorter (`TestProbeHairpinning_SizesToTimeLeft`).
 
@@ -462,11 +479,12 @@ func (s *Server) Serve(ctx context.Context, conn net.PacketConn) error
 
 | Available data | Forecast change vs. v0.1 |
 |---|---|
-| Mapping only (no filtering, no hairpinning) | EIM reads `possible`; `likely` needs measured endpoint-independent filtering |
-| + Filtering data | `unknown` cases drop where filtering disambiguates EIM-with-restrictive-filtering from true APDM. `possible` starts emitting for EIM × Address-Dependent Filtering combinations. |
-| + Hairpinning data | Refines the `possible` / `likely` boundary for cases where hairpinning matters (e.g., behind-the-same-NAT peers). |
+| Mapping only (no filtering, no hairpinning) | EIM reads `possible` |
+| + Filtering data | EIM with endpoint-independent filtering reads `likely`; other filtering leaves `possible` |
+| + Mapping tests | ADM is refined to ADM or APDM; the forecast stays `unlikely` |
+| + Hairpinning data | None: hairpinning is reported, not read by the forecast |
 
-Forecast field stays singular. The UX promise — "one command, one answer" — is preserved.
+The top-level forecast stays singular; each address family's is under `address_families`.
 
 ## coturn reference config
 
@@ -490,23 +508,15 @@ Setup doc (`docs/coturn-setup.md`): one page, three sections — what it is, how
 
 References coturn's own README for everything beyond the natcheck-specific config.
 
-## Validation strategy for v0.2.0 ship
+## Validation
 
-Project-owner one-shot:
+Releases that change probing or classification run real coturn behind real Linux NAT in a local lab, or on a VPS provisioned with `scripts/validate-coturn.sh`. Redacted samples go to `docs/samples/` and results to [`docs/validation-log.md`](validation-log.md). natcheck runs no public reference instance.
 
-1. Spin up coturn on a $5 VPS with `scripts/validate-coturn.sh`.
-2. Run `natcheck --server <vps>:3478` from at least three different client networks.
-3. Capture one redacted sample to `docs/samples/filtering.txt`.
-4. Tear down the VPS after capture.
+## Non-goals
 
-No project-run reference instance committed in v0.2. Whether to run a public reference instance is a separate decision after v0.2.0 ships, evaluated on operational cost vs. user-onboarding leverage.
-
-## v0.2 non-goals (explicit)
-
-- TURN probing — v0.3.
-- IPv6 as a tested contract — v0.3.
-- Multi-interface enumeration — v0.3.
-- Project-run public reference instance — separate decision after v0.2.0.
+- TURN probing.
+- Multi-interface enumeration.
+- A project-run public reference instance.
 
 ## Risks
 

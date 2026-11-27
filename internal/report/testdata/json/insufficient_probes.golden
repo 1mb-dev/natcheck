@@ -21,5 +21,23 @@
   "filtering": {
     "behavior": "untested"
   },
-  "hairpinning": null
+  "hairpinning": null,
+  "address_families": {
+    "ipv4": {
+      "nat_type": "Unknown",
+      "nat_type_legacy": "",
+      "public_endpoint": "203.0.113.45:51820",
+      "webrtc_forecast": {
+        "direct_p2p": "unknown",
+        "turn_required": false
+      },
+      "filtering": {
+        "behavior": "untested"
+      },
+      "warnings": [
+        "filtering_behavior_not_tested",
+        "insufficient_probes"
+      ]
+    }
+  }
 }

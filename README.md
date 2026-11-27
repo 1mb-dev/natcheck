@@ -90,7 +90,7 @@ The `--json` schema (`nat_type`, `public_endpoint`, `probes[]`, `webrtc_forecast
 
 ## Scope
 
-natcheck classifies NAT mapping behavior (Endpoint-Independent, Address-Dependent, Address-and-Port-Dependent per RFC 5780) and reports a WebRTC direct-P2P forecast. Filtering behavior (RFC 5780 §4.4) is classified when the configured `--server` advertises `OTHER-ADDRESS`; otherwise the verdict is `untested`. Hairpinning is reported when the probe can run. Behind a carrier-grade NAT the probes cross it, so the verdict covers it; an address family's first mapped address in `100.64.0.0/10` (a `--server` inside a carrier or overlay network) gives forecast `unknown`. IPv6 works when the network supports it but is not exhaustively tested. A dual-stack host probes one family per hostname, so the verdict covers the family it reached; pass A-record addresses to `--server` to check IPv4.
+natcheck classifies NAT mapping behavior (Endpoint-Independent, Address-Dependent, Address-and-Port-Dependent per RFC 5780) and reports a WebRTC direct-P2P forecast. Filtering behavior (RFC 5780 §4.4) is classified when the configured `--server` advertises `OTHER-ADDRESS`; otherwise the verdict is `untested`. Hairpinning is reported when the probe can run. Behind a carrier-grade NAT the probes cross it, so the verdict covers it; an address family's first mapped address in `100.64.0.0/10` (a `--server` inside a carrier or overlay network) gives that family forecast `unknown`. A dual-stack host is probed in both address families and the verdict follows IPv4; `--json` reports each family under `address_families` ([details](docs/design.md#address-families)).
 
 See [`docs/design.md`](docs/design.md) for full architecture and testing details.
 

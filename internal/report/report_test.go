@@ -36,7 +36,7 @@ func fixtureEIMCone() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureInsufficientServerDiversity() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -54,7 +54,7 @@ func fixtureInsufficientServerDiversity() (classify.Verdict, []probe.Result, *pr
 			RTT:    25 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureIPv4Untested() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -72,7 +72,7 @@ func fixtureIPv4Untested() (classify.Verdict, []probe.Result, *probe.FilteringRe
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureADMStrict() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -88,7 +88,7 @@ func fixtureADMStrict() (classify.Verdict, []probe.Result, *probe.FilteringResul
 			RTT:    31 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureBlocked() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -104,7 +104,7 @@ func fixtureBlocked() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 			Err:    errors.New("dial udp stun.cloudflare.com:3478: i/o timeout"),
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureOffline() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -118,7 +118,7 @@ func fixtureOffline() (classify.Verdict, []probe.Result, *probe.FilteringResult)
 			Err:    errors.New("resolve stun.cloudflare.com: lookup stun.cloudflare.com: no such host"),
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 // fixtureFilteringEIF: EIM mapping + endpoint-independent filtering.
@@ -146,7 +146,7 @@ func fixtureFilteringEIF() (classify.Verdict, []probe.Result, *probe.FilteringRe
 		Test2Received: true,
 		Test3Received: true,
 	}
-	return classify.Classify(probes, f, nil), probes, f
+	return classify.Classify(probes, classify.Filtering{IPv4: f}, nil), probes, f
 }
 
 // fixtureFilteringADF: EIM mapping + address-dependent filtering.
@@ -174,7 +174,7 @@ func fixtureFilteringADF() (classify.Verdict, []probe.Result, *probe.FilteringRe
 		Test2Received: false,
 		Test3Received: true,
 	}
-	return classify.Classify(probes, f, nil), probes, f
+	return classify.Classify(probes, classify.Filtering{IPv4: f}, nil), probes, f
 }
 
 // hairpinTrue / hairpinFalse return *bool for fixture construction —
@@ -202,7 +202,7 @@ func fixtureHairpinningDetected() (classify.Verdict, []probe.Result, *probe.Filt
 		},
 	}
 	h := &probe.HairpinningResult{Server: probes[0].Server, Detected: hairpinTrue()}
-	return classify.Classify(probes, nil, h), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, h), probes, nil
 }
 
 // fixtureHairpinningNotDetected: EIM mapping + hairpinning probed but did
@@ -224,7 +224,7 @@ func fixtureHairpinningNotDetected() (classify.Verdict, []probe.Result, *probe.F
 		},
 	}
 	h := &probe.HairpinningResult{Server: probes[0].Server, Detected: hairpinFalse()}
-	return classify.Classify(probes, nil, h), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, h), probes, nil
 }
 
 // fixtureHairpinningUntested: hairpin probe attempted but socket setup or
@@ -246,7 +246,7 @@ func fixtureHairpinningUntested() (classify.Verdict, []probe.Result, *probe.Filt
 		},
 	}
 	h := &probe.HairpinningResult{Server: probes[0].Server, Err: errors.New("simulated socket setup failure")}
-	return classify.Classify(probes, nil, h), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, h), probes, nil
 }
 
 // fixtureInsufficientProbes: a single successful probe. Combined verdict is
@@ -262,13 +262,72 @@ func fixtureInsufficientProbes() (classify.Verdict, []probe.Result, *probe.Filte
 			RTT:    24 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
-// fixtureMixedV4V6Disagree: IPv4 group agrees on EIM, IPv6 group disagrees
-// (looks like ADM). Combined verdict is Unknown. Exercises the render path
-// for WarnMixedAddressFamilyProbes — the v0.1.3 cross-address-family
-// classifier fix had no render regression guard before this fixture.
+// fixtureIPv4Stricter: IPv4 maps differently (ADM), IPv6 EIM; IPv4 decides.
+func fixtureIPv4Stricter() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51820"),
+			RTT:    24 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("[2001:db8:c::1]:19302"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    42 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
+			Mapped: netip.MustParseAddrPort("203.0.113.45:51821"),
+			RTT:    31 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("[2001:db8:d::1]:3478"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    47 * time.Millisecond,
+		},
+	}
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
+}
+
+// fixtureIPv4Silent: IPv4 requests left and nothing came back while IPv6
+// answered; the silent IPv4 family is Blocked and decides.
+func fixtureIPv4Silent() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
+	probes := []probe.Result{
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("192.0.2.10:19302"),
+			Err:    errors.New("no response from 192.0.2.10:19302: context deadline exceeded"),
+		},
+		{
+			Server: probe.Server{Host: "stun.l.google.com", Port: 19302},
+			Target: netip.MustParseAddrPort("[2001:db8:c::1]:19302"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    42 * time.Millisecond,
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("192.0.2.20:3478"),
+			Err:    errors.New("no response from 192.0.2.20:3478: context deadline exceeded"),
+		},
+		{
+			Server: probe.Server{Host: "stun.cloudflare.com", Port: 3478},
+			Target: netip.MustParseAddrPort("[2001:db8:d::1]:3478"),
+			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
+			RTT:    47 * time.Millisecond,
+		},
+	}
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
+}
+
+// fixtureMixedV4V6Disagree: IPv4 agrees on EIM, IPv6 maps differently (ADM).
+// IPv4 decides; address_families_disagree names both forecasts.
 func fixtureMixedV4V6Disagree() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 	probes := []probe.Result{
 		{
@@ -285,18 +344,18 @@ func fixtureMixedV4V6Disagree() (classify.Verdict, []probe.Result, *probe.Filter
 		},
 		{
 			Server: probe.Server{Host: "stun6.l.google.com", Port: 19302},
-			Target: netip.MustParseAddrPort("192.0.2.30:19302"),
+			Target: netip.MustParseAddrPort("[2001:db8:c::1]:19302"),
 			Mapped: netip.MustParseAddrPort("[2001:db8::1]:51820"),
 			RTT:    42 * time.Millisecond,
 		},
 		{
 			Server: probe.Server{Host: "stun6.cloudflare.com", Port: 3478},
-			Target: netip.MustParseAddrPort("192.0.2.40:3478"),
+			Target: netip.MustParseAddrPort("[2001:db8:d::1]:3478"),
 			Mapped: netip.MustParseAddrPort("[2001:db8::2]:51821"),
 			RTT:    47 * time.Millisecond,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 // fixtureFilteringAPDF: EIM mapping + address-and-port-dependent filtering.
@@ -324,7 +383,7 @@ func fixtureFilteringAPDF() (classify.Verdict, []probe.Result, *probe.FilteringR
 		Test2Received: false,
 		Test3Received: false,
 	}
-	return classify.Classify(probes, f, nil), probes, f
+	return classify.Classify(probes, classify.Filtering{IPv4: f}, nil), probes, f
 }
 
 func fixtureNoNAT() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -344,7 +403,7 @@ func fixtureNoNAT() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
 			Untranslated: true,
 		},
 	}
-	return classify.Classify(probes, nil, nil), probes, nil
+	return classify.Classify(probes, classify.Filtering{}, nil), probes, nil
 }
 
 func fixtureMappingTestAPDM() (classify.Verdict, []probe.Result, *probe.FilteringResult) {
@@ -370,7 +429,7 @@ func fixtureMappingTestAPDM() (classify.Verdict, []probe.Result, *probe.Filterin
 		AltIPMapped:       netip.MustParseAddrPort("203.0.113.45:51831"),
 		AltEndpointMapped: netip.MustParseAddrPort("203.0.113.45:51832"),
 	}
-	return classify.Classify(probes, f, nil), probes, f
+	return classify.Classify(probes, classify.Filtering{IPv4: f}, nil), probes, f
 }
 
 // compareGolden loads want from path and diff-compares against got. Set
@@ -420,6 +479,8 @@ func TestRender_Golden(t *testing.T) {
 		{"filtering_adf", fixtureFilteringADF},
 		{"filtering_apdf", fixtureFilteringAPDF},
 		{"mixed_v4v6_disagree", fixtureMixedV4V6Disagree},
+		{"ipv4_stricter", fixtureIPv4Stricter},
+		{"ipv4_silent", fixtureIPv4Silent},
 		{"insufficient_probes", fixtureInsufficientProbes},
 		{"hairpinning_detected", fixtureHairpinningDetected},
 		{"hairpinning_not_detected", fixtureHairpinningNotDetected},
@@ -464,5 +525,49 @@ func TestRender_WarningsAlwaysArray(t *testing.T) {
 	}
 	if !bytes.Contains(buf.Bytes(), []byte(`"warnings": []`)) {
 		t.Errorf("expected empty warnings array, got: %s", buf.String())
+	}
+}
+
+func TestRender_HidesUnsentFamily(t *testing.T) {
+	a := probe.Server{Host: "stun.example.org", Port: 3478}
+	b := probe.Server{Host: "stun.example.net", Port: 3478}
+	probes := []probe.Result{
+		{Server: a, Target: netip.MustParseAddrPort("192.0.2.10:3478"), Mapped: netip.MustParseAddrPort("198.51.100.1:40000"), RTT: 10 * time.Millisecond},
+		{Server: a, Err: errors.New("write a: network is unreachable")},
+		{Server: b, Err: errors.New("write b: network is unreachable")},
+	}
+	v := classify.Classify(probes, classify.Filtering{}, nil)
+
+	human := renderToBytes(t, v, probes, nil, FormatHuman)
+	if bytes.Contains(human, []byte("write a")) || !bytes.Contains(human, []byte("write b")) {
+		t.Errorf("human output must hide only the row whose server sent in another family:\n%s", human)
+	}
+	j := renderToBytes(t, v, probes, nil, FormatJSON)
+	if !bytes.Contains(j, []byte("write a")) || !bytes.Contains(j, []byte("write b")) {
+		t.Errorf("JSON must keep every row:\n%s", j)
+	}
+
+	ipv6Only := []probe.Result{
+		{Server: a, Err: errors.New("write a: network is unreachable")},
+		{Server: a, Target: netip.MustParseAddrPort("[2001:db8:a::1]:3478"), Mapped: netip.MustParseAddrPort("[2001:db8::1]:40000"), RTT: 10 * time.Millisecond},
+		{Server: b, Err: errors.New("write b: network is unreachable")},
+		{Server: b, Target: netip.MustParseAddrPort("[2001:db8:b::1]:3478"), Mapped: netip.MustParseAddrPort("[2001:db8::1]:40000"), RTT: 10 * time.Millisecond},
+	}
+	v = classify.Classify(ipv6Only, classify.Filtering{}, nil)
+	human = renderToBytes(t, v, ipv6Only, nil, FormatHuman)
+	if !bytes.Contains(human, []byte("write a")) || !bytes.Contains(human, []byte("write b")) {
+		t.Errorf("under ipv4_untested, human output must keep the rows that show why:\n%s", human)
+	}
+
+	ipv6Silent := []probe.Result{
+		{Server: a, Err: errors.New("write a: network is unreachable")},
+		{Server: a, Target: netip.MustParseAddrPort("[2001:db8:a::1]:3478"), Err: errors.New("no response")},
+		{Server: b, Err: errors.New("write b: network is unreachable")},
+		{Server: b, Target: netip.MustParseAddrPort("[2001:db8:b::1]:3478"), Err: errors.New("no response")},
+	}
+	v = classify.Classify(ipv6Silent, classify.Filtering{}, nil)
+	human = renderToBytes(t, v, ipv6Silent, nil, FormatHuman)
+	if v.Type != classify.Blocked || !bytes.Contains(human, []byte("write a")) || !bytes.Contains(human, []byte("write b")) {
+		t.Errorf("when every probe failed, human output must keep every row:\n%s", human)
 	}
 }

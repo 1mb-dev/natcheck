@@ -44,10 +44,13 @@ type Result struct {
 	Err          error
 }
 
-// Prober probes every server in one run and returns one Result per server, in
-// input order. Taking the whole set is the point of the interface: probes must
-// be able to share a local endpoint. Implementations must not panic on bad
-// input and must respect context cancellation.
+// Prober probes every server in one run and returns, in input order, one
+// Result per server per address family it resolves to, IPv4 first
+// (TestProbe_EachFamilyOnItsOwn), or one Result carrying the error when a
+// server is invalid or does not resolve. Taking the whole set is the point of
+// the interface: probes must be able to share a local endpoint.
+// Implementations must not panic on bad input and must respect context
+// cancellation.
 type Prober interface {
 	ProbeAll(ctx context.Context, servers []Server) []Result
 }

@@ -314,7 +314,7 @@ func TestClassify(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Classify(tc.results, tc.filtering, nil)
+			got := Classify(tc.results, inFamily(tc.filtering), nil)
 
 			if got.Type != tc.wantType {
 				t.Errorf("Type = %v, want %v", got.Type, tc.wantType)
@@ -358,10 +358,10 @@ func TestClassify(t *testing.T) {
 // TestClassify_NilSafe: the brain of the tool must not panic on degenerate
 // inputs. Callers may hand us nil or zero-value results in error paths.
 func TestClassify_NilSafe(t *testing.T) {
-	_ = Classify(nil, nil, nil)
-	_ = Classify([]probe.Result{}, nil, nil)
-	_ = Classify([]probe.Result{{}}, nil, nil)         // zero-value result
-	_ = Classify([]probe.Result{{}, {}, {}}, nil, nil) // multiple zero-value
+	_ = Classify(nil, Filtering{}, nil)
+	_ = Classify([]probe.Result{}, Filtering{}, nil)
+	_ = Classify([]probe.Result{{}}, Filtering{}, nil)         // zero-value result
+	_ = Classify([]probe.Result{{}, {}, {}}, Filtering{}, nil) // multiple zero-value
 }
 
 // TestNATType_String covers every branch.
@@ -500,7 +500,7 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Classify(eimProbes, tc.filtering, nil)
+			got := Classify(eimProbes, inFamily(tc.filtering), nil)
 			if got.Filtering != tc.wantBehavior {
 				t.Errorf("Filtering = %v, want %v", got.Filtering, tc.wantBehavior)
 			}
@@ -519,159 +519,147 @@ func TestClassify_FilteringMatrix(t *testing.T) {
 			if tc.wantWarnAbsent != "" && hasWarning(got.Warnings, tc.wantWarnAbsent) {
 				t.Errorf("Warnings unexpectedly contains %q; got %v", tc.wantWarnAbsent, got.Warnings)
 			}
-			// Filtering matrix uses two same-family probes; the cross-family
-			// warning must never leak in.
-			if hasWarning(got.Warnings, WarnMixedAddressFamilyProbes) {
-				t.Errorf("Warnings unexpectedly contains %q; got %v", WarnMixedAddressFamilyProbes, got.Warnings)
-			}
 		})
 	}
 }
 
-// TestClassify_MixedAddressFamily covers the per-family grouping + combine
-// path added for #14. Each family observes its own NAT, so cross-family
-// equality comparison would always disagree by construction; the classifier
-// groups by Mapped.Addr().Is4(), classifies each group, and combines under
-// the rule "Unknown is absence of information, not disagreement."
-func TestClassify_MixedAddressFamily(t *testing.T) {
-	v4ok := func(host, mapped string) probe.Result {
+func TestClassify_AddressFamilies(t *testing.T) {
+	v4a := ok("a", 3478, "203.0.113.45:51820", 10*time.Millisecond)
+	v4b := ok("b", 3478, "203.0.113.45:51820", 10*time.Millisecond)
+	v4bADM := ok("b", 3478, "203.0.113.45:51821", 10*time.Millisecond)
+	cgnA := ok("a", 3478, "100.64.1.5:51820", 10*time.Millisecond)
+	cgnB := ok("b", 3478, "100.64.1.5:51820", 10*time.Millisecond)
+	v6 := func(host, mapped string) probe.Result {
 		return probe.Result{
 			Server: probe.Server{Host: host, Port: 3478},
-			Target: targetFor(host, 3478),
+			Target: netip.AddrPortFrom(netip.MustParseAddr("2001:db8:ff::1").Next(), 3478),
 			Mapped: netip.MustParseAddrPort(mapped),
 			RTT:    10 * time.Millisecond,
 		}
 	}
-	v6ok := func(host, mapped string) probe.Result {
-		return probe.Result{
-			Server: probe.Server{Host: host, Port: 3478},
-			Target: targetFor(host, 3478),
-			Mapped: netip.MustParseAddrPort(mapped),
-			RTT:    10 * time.Millisecond,
-		}
+	v6c := v6("c", "[2001:db8::1]:51820")
+	v6c.Target = netip.MustParseAddrPort("[2001:db8:ff::c]:3478")
+	v6d := v6("d", "[2001:db8::1]:51820")
+	v6d.Target = netip.MustParseAddrPort("[2001:db8:ff::d]:3478")
+	v6dADM := v6d
+	v6dADM.Mapped = netip.MustParseAddrPort("[2001:db8::1]:51821")
+	untranslated := func(r probe.Result) probe.Result { r.Untranslated = true; return r }
+	silent := func(target string, replied bool) probe.Result {
+		return probe.Result{Server: probe.Server{Host: "s", Port: 3478}, Target: netip.MustParseAddrPort(target), Replied: replied, Err: errors.New("no response")}
 	}
+	eif := func(mapped string) *probe.FilteringResult {
+		return &probe.FilteringResult{Server: probe.Server{Host: "rfc5780", Port: 3478}, Test1Mapped: netip.MustParseAddrPort(mapped), Test2Received: true, Test3Received: true}
+	}
+	// at is an IPv4-only server's row: sent to target, mapped to mapped. Under
+	// DNS64 its synthesized AAAA leaves from the IPv6 socket and maps IPv4 too.
+	at := func(host, target, mapped string) probe.Result {
+		return probe.Result{Server: probe.Server{Host: host, Port: 3478}, Target: netip.MustParseAddrPort(target), Mapped: netip.MustParseAddrPort(mapped), RTT: 10 * time.Millisecond}
+	}
+	clatA, clatB := at("a", "192.0.2.10:3478", "203.0.113.45:51820"), at("b", "192.0.2.20:3478", "203.0.113.45:51820")
+	nat64A, nat64B := at("a", "[64:ff9b::c000:20a]:3478", "203.0.113.45:40000"), at("b", "[64:ff9b::c000:214]:3478", "203.0.113.45:40000")
 
+	const fnt, hu = WarnFilteringBehaviorNotTested, WarnHairpinUntested
 	cases := []struct {
-		name           string
-		results        []probe.Result
-		wantType       NATType
-		wantLegacy     string
-		wantCGNAT      bool
-		wantP2P        string
-		wantWarnHas    []string
-		wantWarnAbsent []string
+		name      string
+		results   []probe.Result
+		filtering Filtering
+		wantType  NATType
+		wantP2P   string
+		wantWarns []string
+		check     func(t *testing.T, v Verdict)
 	}{
-		{
-			name: "mixed_v4eim_v6eim_agreed",
-			results: []probe.Result{
-				v4ok("a", "203.0.113.45:51820"),
-				v4ok("b", "203.0.113.45:51820"),
-				v6ok("c", "[2001:db8::1]:51820"),
-				v6ok("d", "[2001:db8::1]:51820"),
-			},
-			wantType:       EndpointIndependentMapping,
-			wantLegacy:     "cone",
-			wantP2P:        "possible",
-			wantWarnHas:    []string{WarnMixedAddressFamilyProbes, WarnFilteringBehaviorNotTested},
-			wantWarnAbsent: []string{WarnADMOrStricter, WarnInsufficientProbes, WarnAllProbesFailed},
-		},
-		{
-			name: "mixed_v4eim_v6adm_disagreement",
-			results: []probe.Result{
-				v4ok("a", "203.0.113.45:51820"),
-				v4ok("b", "203.0.113.45:51820"),
-				v6ok("c", "[2001:db8::1]:51820"),
-				v6ok("d", "[2001:db8::2]:51821"),
-			},
-			wantType:       Unknown,
-			wantP2P:        "unknown",
-			wantWarnHas:    []string{WarnMixedAddressFamilyProbes},
-			wantWarnAbsent: []string{WarnADMOrStricter}, // suppressed: combined verdict isn't ADM
-		},
-		{
-			name: "mixed_v4eim_v6singleton_v4_wins",
-			results: []probe.Result{
-				v4ok("a", "203.0.113.45:51820"),
-				v4ok("b", "203.0.113.45:51820"),
-				v6ok("c", "[2001:db8::1]:51820"),
-			},
-			wantType:    EndpointIndependentMapping,
-			wantLegacy:  "cone",
-			wantP2P:     "possible",
-			wantWarnHas: []string{WarnMixedAddressFamilyProbes, WarnInsufficientProbes},
-		},
-		{
-			name: "mixed_v4cgnat_eim_v6eim_cgnat_precedence",
-			results: []probe.Result{
-				v4ok("a", "100.64.1.5:51820"),
-				v4ok("b", "100.64.1.5:51820"),
-				v6ok("c", "[2001:db8::1]:51820"),
-				v6ok("d", "[2001:db8::1]:51820"),
-			},
-			wantType:    EndpointIndependentMapping,
-			wantLegacy:  "cone",
-			wantCGNAT:   true,
-			wantP2P:     "unknown", // CGNAT precedence overrides EIM
-			wantWarnHas: []string{WarnMixedAddressFamilyProbes, WarnCGNATDetected},
-		},
-		{
-			name: "mixed_singleton_each_combined_unknown",
-			results: []probe.Result{
-				v4ok("a", "203.0.113.45:51820"),
-				v6ok("b", "[2001:db8::1]:51820"),
-			},
-			wantType:    Unknown,
-			wantP2P:     "unknown",
-			wantWarnHas: []string{WarnMixedAddressFamilyProbes, WarnInsufficientProbes},
-		},
-		{
-			name: "single_family_v6_only_no_mixed_warning",
-			results: []probe.Result{
-				v6ok("a", "[2001:db8::1]:51820"),
-				v6ok("b", "[2001:db8::1]:51820"),
-			},
-			wantType:       EndpointIndependentMapping,
-			wantLegacy:     "cone",
-			wantP2P:        "possible",
-			wantWarnAbsent: []string{WarnMixedAddressFamilyProbes, WarnADMOrStricter, WarnInsufficientProbes},
-		},
-		{
-			name: "single_family_v4_unchanged_path",
-			results: []probe.Result{
-				v4ok("a", "203.0.113.45:51820"),
-				v4ok("b", "203.0.113.45:51820"),
-			},
-			wantType:       EndpointIndependentMapping,
-			wantLegacy:     "cone",
-			wantP2P:        "possible",
-			wantWarnAbsent: []string{WarnMixedAddressFamilyProbes, WarnADMOrStricter, WarnInsufficientProbes},
-		},
+		{name: "both families cone", results: []probe.Result{v4a, v4b, v6c, v6d},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, hu},
+			check: func(t *testing.T, v Verdict) {
+				if v.PublicEndpoint != v4a.Mapped || v.IPv4 == nil || v.IPv6 == nil {
+					t.Errorf("PublicEndpoint %v, IPv4 %v, IPv6 %v; want IPv4's endpoint and both families", v.PublicEndpoint, v.IPv4, v.IPv6)
+				}
+			}},
+		{name: "IPv4 symmetric, IPv6 cone", results: []probe.Result{v6c, v6d, v4a, v4bADM},
+			wantType: AddressDependentMapping, wantP2P: "unlikely", wantWarns: []string{fnt, WarnAddressFamiliesDisagree, WarnADMOrStricter, hu}},
+		{name: "IPv4 cone, IPv6 symmetric", results: []probe.Result{v4a, v4b, v6c, v6dADM},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, WarnAddressFamiliesDisagree, hu}},
+		{name: "IPv4 cone, one IPv6 probe", results: []probe.Result{v4a, v4b, v6c},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, WarnAddressFamiliesDisagree, WarnInsufficientProbes, hu}},
+		{name: "one IPv4 probe, IPv6 cone", results: []probe.Result{v4a, v6c, v6d},
+			wantType: Unknown, wantP2P: "unknown", wantWarns: []string{fnt, WarnAddressFamiliesDisagree, WarnInsufficientProbes, hu}},
+		{name: "one probe in each family", results: []probe.Result{v4a, v6c},
+			wantType: Unknown, wantP2P: "unknown", wantWarns: []string{fnt, WarnInsufficientProbes, hu}},
+		{name: "IPv4 CGNAT, IPv6 symmetric", results: []probe.Result{cgnA, cgnB, v6c, v6dADM},
+			wantType: EndpointIndependentMapping, wantP2P: "unknown", wantWarns: []string{fnt, WarnAddressFamiliesDisagree, WarnCGNATDetected, hu}},
+		{name: "IPv4 silent, IPv6 cone", results: []probe.Result{silent("192.0.2.1:3478", false), silent("192.0.2.2:3478", false), v6c, v6d},
+			wantType: Blocked, wantP2P: "unlikely", wantWarns: []string{fnt, WarnAddressFamiliesDisagree, hu},
+			check: func(t *testing.T, v Verdict) {
+				if !v.Forecast.TURNRequired || v.IPv4 == nil || v.IPv4.Type != Blocked {
+					t.Errorf("TURNRequired %v, IPv4 %+v; want TURN and a Blocked IPv4 family", v.Forecast.TURNRequired, v.IPv4)
+				}
+			}},
+		{name: "IPv4 replied without a mapping, IPv6 cone", results: []probe.Result{silent("192.0.2.1:3478", true), v6c, v6d},
+			wantType: Blocked, wantP2P: "unknown", wantWarns: []string{fnt, WarnAddressFamiliesDisagree, hu}},
+		{name: "IPv4 unsendable, IPv6 cone", results: []probe.Result{unsent("s", 3478), unsent("t", 3478), v6c, v6d},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, WarnIPv4Untested, hu}},
+		{name: "IPv6 silent, IPv4 cone", results: []probe.Result{v4a, v4b, silent("[2001:db8:ff::c]:3478", false)},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, hu},
+			check: func(t *testing.T, v Verdict) {
+				if v.IPv6 != nil {
+					t.Errorf("IPv6 = %+v, want absent", v.IPv6)
+				}
+			}},
+		{name: "CLAT: IPv4 socket and NAT64 rows both map IPv4", results: []probe.Result{clatA, nat64A, clatB, nat64B},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, hu},
+			check: func(t *testing.T, v Verdict) {
+				if v.IPv4 == nil || v.IPv6 != nil || v.PublicEndpoint != clatA.Mapped {
+					t.Errorf("IPv4 %v, IPv6 %v, PublicEndpoint %v; want the IPv4 socket's family only", v.IPv4, v.IPv6, v.PublicEndpoint)
+				}
+			}},
+		{name: "CLAT: IPv4 socket symmetric, NAT64 rows agree", results: []probe.Result{clatA, nat64A, at("b", "192.0.2.20:3478", "203.0.113.45:51821"), nat64B},
+			wantType: AddressDependentMapping, wantP2P: "unlikely", wantWarns: []string{fnt, WarnADMOrStricter, hu}},
+		{name: "NAT64 without CLAT: IPv4 unsendable", results: []probe.Result{unsent("a", 3478), nat64A, unsent("b", 3478), nat64B},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, hu},
+			check: func(t *testing.T, v Verdict) {
+				if v.IPv4 == nil || v.PublicEndpoint != nat64A.Mapped {
+					t.Errorf("IPv4 %v, PublicEndpoint %v; want an IPv4 family from the NAT64 rows", v.IPv4, v.PublicEndpoint)
+				}
+			}},
+		{name: "NAT64 rows map IPv4, IPv4 socket silent", results: []probe.Result{silent("192.0.2.10:3478", false), nat64A, silent("192.0.2.20:3478", false), nat64B},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, hu},
+			check: func(t *testing.T, v Verdict) {
+				if v.IPv4 == nil || v.PublicEndpoint != nat64A.Mapped {
+					t.Errorf("IPv4 %v, PublicEndpoint %v; want an IPv4 family from the NAT64 rows", v.IPv4, v.PublicEndpoint)
+				}
+			}},
+		{name: "IPv6 only", results: []probe.Result{v6c, v6d},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, WarnIPv4Untested, hu}},
+		{name: "no NAT on IPv6 only", results: []probe.Result{v4a, v4b, untranslated(v6c), untranslated(v6d)},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, hu},
+			check: func(t *testing.T, v Verdict) {
+				if !hasWarning(v.IPv6.Warnings, WarnNoNAT) || hasWarning(v.IPv4.Warnings, WarnNoNAT) {
+					t.Errorf("family warnings IPv4 %v, IPv6 %v; want no_nat on IPv6 only", v.IPv4.Warnings, v.IPv6.Warnings)
+				}
+			}},
+		{name: "no NAT in both families", results: []probe.Result{untranslated(v4a), untranslated(v4b), untranslated(v6c), untranslated(v6d)},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, WarnNoNAT, hu}},
+		{name: "filtering measured on IPv4", results: []probe.Result{v4a, v4b, v6c, v6d}, filtering: Filtering{IPv4: eif("203.0.113.45:51820")},
+			wantType: EndpointIndependentMapping, wantP2P: "likely", wantWarns: []string{WarnAddressFamiliesDisagree, hu}},
+		{name: "filtering measured on IPv6 only", results: []probe.Result{v4a, v4b, v6c, v6d}, filtering: Filtering{IPv6: eif("[2001:db8::1]:51820")},
+			wantType: EndpointIndependentMapping, wantP2P: "possible", wantWarns: []string{fnt, WarnAddressFamiliesDisagree, hu},
+			check: func(t *testing.T, v Verdict) {
+				if v.Filtering != FilteringUntested || v.IPv6.Filtering != FilteringEndpointIndependent || v.IPv6.Forecast.DirectP2P != "likely" {
+					t.Errorf("top filtering %v, IPv6 filtering %v forecast %q; want untested, endpoint-independent, likely", v.Filtering, v.IPv6.Filtering, v.IPv6.Forecast.DirectP2P)
+				}
+			}},
 	}
-
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := Classify(tc.results, nil, nil)
-			if got.Type != tc.wantType {
-				t.Errorf("Type = %v, want %v", got.Type, tc.wantType)
+			got := Classify(tc.results, tc.filtering, nil)
+			if got.Type != tc.wantType || got.Forecast.DirectP2P != tc.wantP2P {
+				t.Errorf("Type, DirectP2P = %v, %q; want %v, %q", got.Type, got.Forecast.DirectP2P, tc.wantType, tc.wantP2P)
 			}
-			if got.LegacyName != tc.wantLegacy {
-				t.Errorf("LegacyName = %q, want %q", got.LegacyName, tc.wantLegacy)
+			if !slices.Equal(got.Warnings, tc.wantWarns) {
+				t.Errorf("Warnings = %v, want %v", got.Warnings, tc.wantWarns)
 			}
-			if got.CGNAT != tc.wantCGNAT {
-				t.Errorf("CGNAT = %v, want %v", got.CGNAT, tc.wantCGNAT)
-			}
-			if got.Forecast.DirectP2P != tc.wantP2P {
-				t.Errorf("DirectP2P = %q, want %q", got.Forecast.DirectP2P, tc.wantP2P)
-			}
-			for _, want := range tc.wantWarnHas {
-				if !hasWarning(got.Warnings, want) {
-					t.Errorf("Warnings missing %q; got %v", want, got.Warnings)
-				}
-			}
-			for _, absent := range tc.wantWarnAbsent {
-				if hasWarning(got.Warnings, absent) {
-					t.Errorf("Warnings unexpectedly contains %q; got %v", absent, got.Warnings)
-				}
+			if tc.check != nil {
+				tc.check(t, got)
 			}
 		})
 	}
@@ -770,13 +758,13 @@ func TestClassify_ServerDiversity(t *testing.T) {
 				at("c", "[2001:db8::1]:3478", "[2001:db8::99]:5000"),
 				at("d", "[2001:db8::2]:3478", "[2001:db8::99]:5000"),
 			},
-			wantType:    EndpointIndependentMapping,
+			wantType:    Unknown, // IPv4 decides (TestClassify_AddressFamilies)
 			wantWarning: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := Classify(tc.results, nil, nil)
+			v := Classify(tc.results, Filtering{}, nil)
 			if v.Type != tc.wantType {
 				t.Errorf("Type = %v, want %v", v.Type, tc.wantType)
 			}
@@ -800,14 +788,15 @@ func TestClassify_IPv4UntestedWarning(t *testing.T) {
 		want    bool
 	}{
 		{"IPv6 only", []probe.Result{v6("a"), v6("b")}, true},
-		{"IPv6 answered, IPv4 server failed", []probe.Result{v6("a"), v6("b"), fail("c", 3478)}, true},
+		{"IPv6 answered, IPv4 never sent", []probe.Result{v6("a"), v6("b"), unsent("c", 3478)}, true},
+		{"IPv6 answered, IPv4 silent", []probe.Result{v6("a"), v6("b"), fail("c", 3478)}, false},
 		{"IPv4 only", []probe.Result{v4("a"), v4("b")}, false},
 		{"both families", []probe.Result{v4("a"), v6("b")}, false},
 		{"nothing answered", []probe.Result{fail("a", 3478), fail("b", 3478)}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := Classify(tc.results, nil, nil)
+			v := Classify(tc.results, Filtering{}, nil)
 			if got := slices.Contains(v.Warnings, WarnIPv4Untested); got != tc.want {
 				t.Errorf("warning present = %v, want %v; warnings=%v", got, tc.want, v.Warnings)
 			}
@@ -826,7 +815,7 @@ func TestClassify_NoNAT(t *testing.T) {
 		want    bool
 	}{
 		{"every probe untranslated", []probe.Result{untranslated(v6("a")), untranslated(v6("b"))}, true},
-		{"one probe, untranslated", []probe.Result{untranslated(v6("a")), fail("b", 3478)}, true},
+		{"one probe, untranslated", []probe.Result{untranslated(v6("a")), unsent("b", 3478)}, true},
 		{"one of two untranslated", []probe.Result{untranslated(v4("a")), v4("b")}, false},
 		{"none untranslated", []probe.Result{v4("a"), v4("b")}, false},
 		{"IPv6 untranslated, IPv4 translated", []probe.Result{untranslated(v6("a")), untranslated(v6("b")), v4("c"), v4("d")}, false},
@@ -835,7 +824,7 @@ func TestClassify_NoNAT(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := Classify(tc.results, nil, nil)
+			v := Classify(tc.results, Filtering{}, nil)
 			if got := slices.Contains(v.Warnings, WarnNoNAT); got != tc.want {
 				t.Errorf("no_nat present = %v, want %v; warnings=%v", got, tc.want, v.Warnings)
 			}
@@ -845,7 +834,7 @@ func TestClassify_NoNAT(t *testing.T) {
 				r.Untranslated = false
 				plain[i] = r
 			}
-			base := Classify(plain, nil, nil)
+			base := Classify(plain, Filtering{}, nil)
 			if v.Type != base.Type || v.LegacyName != base.LegacyName || v.Forecast != base.Forecast {
 				t.Errorf("verdict moved: %v %q %+v, want %v %q %+v", v.Type, v.LegacyName, v.Forecast, base.Type, base.LegacyName, base.Forecast)
 			}
@@ -897,12 +886,12 @@ func TestClassify_MappingTest(t *testing.T) {
 		{"EIM stays EIM", eim, portDependent, EndpointIndependentMapping, false},
 		{"Unknown stays Unknown", single, portDependent, Unknown, false},
 		{"tested family decides", append(slices.Clone(adm), v6One), portDependent, AddressPortDependentMapping, false},
-		{"other family is ADM too", append(slices.Clone(adm), v6ADM...), portDependent, AddressDependentMapping, true},
+		{"other family is ADM too", append(slices.Clone(adm), v6ADM...), portDependent, AddressPortDependentMapping, false},
 		{"tests ran on the other family", append(slices.Clone(adm), v6One), mapping("[2001:db8::1]:40000", "[2001:db8::1]:40001", "[2001:db8::1]:40002"), AddressDependentMapping, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			v := Classify(tc.results, tc.filtering, nil)
+			v := Classify(tc.results, inFamily(tc.filtering), nil)
 			if v.Type != tc.wantType {
 				t.Errorf("Type = %v, want %v", v.Type, tc.wantType)
 			}
@@ -914,4 +903,13 @@ func TestClassify_MappingTest(t *testing.T) {
 			}
 		})
 	}
+}
+
+// inFamily files f under the family of its Test 1 mapping, IPv4 when it has
+// none, as cli does with the probe that selected the server.
+func inFamily(f *probe.FilteringResult) Filtering {
+	if f != nil && f.Test1Mapped.Addr().Is6() {
+		return Filtering{IPv6: f}
+	}
+	return Filtering{IPv4: f}
 }
