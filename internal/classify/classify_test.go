@@ -265,6 +265,19 @@ func TestClassify(t *testing.T) {
 			wantTURN:   false,
 		},
 		{
+			name: "private mapped address — not CGNAT",
+			results: []probe.Result{
+				ok("google", 19302, "192.168.1.2:51820", 10*time.Millisecond),
+				ok("cloudflare", 3478, "192.168.1.2:51820", 20*time.Millisecond),
+			},
+			wantType:       EndpointIndependentMapping,
+			wantLegacy:     "cone",
+			wantCGNAT:      false,
+			wantP2P:        "possible",
+			wantTURN:       false,
+			wantWarnAbsent: []string{WarnCGNATDetected},
+		},
+		{
 			name: "upper CGNAT edge 100.127.255.255 — still CGNAT",
 			results: []probe.Result{
 				ok("google", 19302, "100.127.255.255:51820", 10*time.Millisecond),

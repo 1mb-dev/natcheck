@@ -240,6 +240,35 @@ func TestRun_MappingBehaviorOverRealSockets(t *testing.T) {
 			wantForecast: "unlikely",
 			wantCode:     1,
 		},
+		// A carrier NAT in front of the home NAT: the probes cross both, so the
+		// verdict covers both (docs/design.md § CGNAT detection).
+		{
+			name: "endpoint-independent NAT behind a per-destination NAT",
+			targets: func(t *testing.T, servers []*net.UDPAddr) []*net.UDPAddr {
+				return startNATSim(t, startNATSim(t, servers, true), false)
+			},
+			wantType:     "ADM",
+			wantForecast: "unlikely",
+			wantCode:     1,
+		},
+		{
+			name: "per-destination NAT behind an endpoint-independent NAT",
+			targets: func(t *testing.T, servers []*net.UDPAddr) []*net.UDPAddr {
+				return startNATSim(t, startNATSim(t, servers, false), true)
+			},
+			wantType:     "ADM",
+			wantForecast: "unlikely",
+			wantCode:     1,
+		},
+		{
+			name: "endpoint-independent NAT behind an endpoint-independent NAT",
+			targets: func(t *testing.T, servers []*net.UDPAddr) []*net.UDPAddr {
+				return startNATSim(t, startNATSim(t, servers, false), false)
+			},
+			wantType:     "EIM",
+			wantForecast: "possible",
+			wantCode:     0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

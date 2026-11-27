@@ -420,7 +420,7 @@ func applyFiltering(v *Verdict, f *probe.FilteringResult) {
 
 // decideForecast computes the WebRTC forecast from a fully-populated Verdict.
 // Precedence (top-down, first match wins):
-//  1. CGNAT detected → unknown (v0.1 honesty rule preserved)
+//  1. CGNAT detected → unknown
 //  2. Blocked → unknown when a target replied; else TURN required, and unknown
 //     when no request was sent, unlikely when one was
 //     (TestDecideForecast_Precedence)
@@ -464,8 +464,10 @@ func decideForecast(v Verdict) Forecast {
 	}
 }
 
-// applyCGNAT sets CGNAT=true and appends the warning when the observed public
-// IP falls in RFC 6598 100.64.0.0/10.
+// applyCGNAT sets CGNAT=true and appends the warning when the group's first
+// mapped address is in RFC 6598 100.64.0.0/10. Public servers never see that
+// range; behind a carrier NAT the probes cross it and the mapping verdict
+// covers it (TestRun_MappingBehaviorOverRealSockets).
 func applyCGNAT(v *Verdict) {
 	if !v.PublicEndpoint.IsValid() {
 		return

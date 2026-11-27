@@ -48,7 +48,7 @@ In:
 - `--timeout duration` flag (default 5s)
 - `--version`, `--help`
 - WebRTC forecast: `likely | possible | unlikely | unknown`. `likely` needs measured endpoint-independent filtering; EIM otherwise reads `possible`
-- CGNAT heuristic warning (if mapped IP is in 100.64.0.0/10)
+- Warning `cgnat_detected` when an address family's first mapped address is in 100.64.0.0/10 (a server inside a carrier or overlay network)
 - Exit codes: 0 (P2P-friendly), 1 (P2P-hostile), 2 (probe error)
 
 Out of scope:
@@ -108,7 +108,7 @@ The JSON schema is a public contract from v0.1 onward; only additive changes aft
 - All probes fail → exit 2, report per-server errors. Forecast `unknown` with `turn_required: false` when a server replied to a request without a usable mapping (such as an error response, or a success with no mapped address); otherwise `turn_required: true`, with `unlikely` when a request left the host and `unknown` when none did (`TestClassify`)
 - A mapping probe that gets no reply but, before its deadline, a packet from the server's address that does not decode reads `undecodable reply from <address>`, not `no response`; that packet does not set `Replied` or change the forecast (`TestProbe_GarbledResponse`, `TestProbe_GarbledThenValidReplySucceeds`, `TestProbe_RepliedWithoutMapping`)
 - Mapped endpoints disagree across servers → NAT type "Address-Dependent Mapping" (or APDM if we can distinguish; v0.1 reports "ADM or stricter"), exit 1, forecast `unlikely`
-- Mapped IP in `100.64.0.0/10` → warning `cgnat_detected`, forecast `unknown`
+- An address family's first mapped address in `100.64.0.0/10` (a server inside a carrier or overlay network) → warning `cgnat_detected`, forecast `unknown`
 
 ## Architecture
 
@@ -277,9 +277,13 @@ Filtering needs `CHANGE-REQUEST`, covered below.
 
 ## CGNAT detection
 
-If the observed public IP falls in `100.64.0.0/10` (RFC 6598 shared address space), emit warning `cgnat_detected`. CGNAT typically prevents inbound direct P2P but doesn't prevent outbound STUN.
+When an address family's first mapped address is in `100.64.0.0/10` (RFC 6598 shared address space), the server sits inside a carrier or overlay network, such as a tailnet. The request never crossed the NAT between that network and the internet, which is the one peers see, so natcheck emits warning `cgnat_detected` and forecasts `unknown` (`TestClassify`).
 
-Forecast on CGNAT: `DirectP2P = "unknown"`. Real-world direct-P2P success on CGNAT varies by carrier; returning `unknown` is the honest answer in the absence of a confident signal.
+Against public servers this does not fire: a carrier NAT translates the range before the request leaves the carrier. Behind a carrier NAT the probes cross it, so the mapping verdict covers every NAT on the path, the carrier's included (`TestRun_MappingBehaviorOverRealSockets`, the chained NAT cases).
+
+natcheck does not infer a carrier from this host's own address: an address in `100.64.0.0/10` can equally come from Tailscale, another overlay or a pod network.
+
+A server on a private network (RFC 1918, ULA) has the same blind spot and is not flagged (`TestClassify`): test labs put a NAT's outside on private addresses, so a private mapped address alone does not show that the path stopped short.
 
 ## Concurrency model
 
@@ -452,7 +456,6 @@ func (s *Server) Serve(ctx context.Context, conn net.PacketConn) error
 | Mapping only (no filtering, no hairpinning) | EIM reads `possible`; `likely` needs measured endpoint-independent filtering |
 | + Filtering data | `unknown` cases drop where filtering disambiguates EIM-with-restrictive-filtering from true APDM. `possible` starts emitting for EIM × Address-Dependent Filtering combinations. |
 | + Hairpinning data | Refines the `possible` / `likely` boundary for cases where hairpinning matters (e.g., behind-the-same-NAT peers). |
-| + CGNAT calibration sample (issue #6) | Carrier-tagged `possible` or `unlikely` replaces `unknown` for matching public IPs. |
 
 Forecast field stays singular. The UX promise — "one command, one answer" — is preserved.
 

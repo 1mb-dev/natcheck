@@ -31,7 +31,7 @@ func warningText(id string) string {
 	case classify.WarnFilteringSkippedNoChangeRequest:
 		return "Filtering skipped: server does not support RFC 5780 CHANGE-REQUEST."
 	case classify.WarnCGNATDetected:
-		return "CGNAT detected (IP in 100.64.0.0/10)."
+		return "Mapped address is in 100.64.0.0/10: the server sits inside a carrier or overlay network, so the NAT beyond it is not measured."
 	case classify.WarnADMOrStricter:
 		return "Classification is ADM or stricter."
 	case classify.WarnAllProbesFailed:
