@@ -172,61 +172,138 @@ func judgeFiltering(target, other netip.AddrPort, t2 *bindingResult, err2 error,
 }
 
 // mappingTestAllowed reports whether Tests II and III can measure anything and
-// may be sent. Apart from the hairpin tag, sent to the mapped endpoint a server
-// reports, they are the only packets natcheck sends to an address a server
-// chose, so OTHER-ADDRESS must be in the target's family and address scope: a
-// public server cannot aim them at a private, loopback, link-local or
-// special-purpose host (TestMappingTestAllowed). On the target's port, Tests II
-// and III would reach one endpoint and always agree.
+// may be sent: OTHER-ADDRESS passes serverChosenAllowed with a nonzero port
+// other than the target's. On the target's port, Tests II and III would reach
+// one endpoint and always agree (TestMappingTestAllowed).
 func mappingTestAllowed(target, other netip.AddrPort) bool {
-	t, o := target.Addr().Unmap(), other.Addr().Unmap()
-	switch {
-	case !other.IsValid(), other.Port() == 0, other.Port() == target.Port():
-		return false
-	case o.Is4() != t.Is4(), o.IsMulticast(), o.IsUnspecified():
+	if !other.IsValid() || other.Port() == 0 || other.Port() == target.Port() {
 		return false
 	}
-	for _, p := range embedsIPv4Prefixes {
-		if p.Contains(o) {
-			return false
-		}
+	return serverChosenAllowed(target.Addr(), other.Addr())
+}
+
+// serverChosenAllowed reports whether natcheck may send to addr, an address a
+// server chose, when the server is target. Apart from Tests II and III, the
+// only such packet is the hairpin tag. addr must be in target's family and
+// scope (addrScope), outside the never rows of specialRanges, and in 2000::/3
+// when it is a public IPv6 address (TestMappingTestAllowed,
+// TestSpecialRanges_MatchIANARegistry).
+func serverChosenAllowed(target, addr netip.Addr) bool {
+	t, a := target.Unmap(), addr.Unmap().WithZone("")
+	if !a.IsValid() || a.Is4() != t.Is4() || a.IsMulticast() {
+		return false
 	}
-	scope := addrScope(o)
-	if o.Is6() && scope == scopePublic && !globalUnicast6.Contains(o) {
+	if specialRange(a, isNever) >= 0 {
+		return false
+	}
+	scope := addrScope(a)
+	if a.Is6() && scope == scopePublic && !globalUnicast6.Contains(a) {
 		return false
 	}
 	return scope == addrScope(t)
 }
 
-// globalUnicast6 is the only IPv6 space a public OTHER-ADDRESS may be in.
-// Outside it lie unassigned space, discard-only 100::/64, and the
-// IPv4-compatible ::/96 and SIIT ::ffff:0:0:0/96 forms, which Unmap does not
-// convert (TestMappingTestAllowed).
+// globalUnicast6 is the only IPv6 space a public server-chosen address may be
+// in. Outside it lie unassigned space and the IPv4-compatible ::/96 and SIIT
+// ::ffff:0:0:0/96 forms, which Unmap does not convert (TestMappingTestAllowed).
 var globalUnicast6 = netip.MustParsePrefix("2000::/3")
 
-// embedsIPv4Prefixes carry an IPv4 address that a gateway or this host's own
-// tunnel sends to (NAT64, Teredo, 6to4), so the prefix hides that address's
-// scope: a target in the same prefix does not make it safe.
-var embedsIPv4Prefixes = []netip.Prefix{
-	netip.MustParsePrefix("64:ff9b::/96"),
-	netip.MustParsePrefix("64:ff9b:1::/48"),
-	netip.MustParsePrefix("2001::/32"),
-	netip.MustParsePrefix("2002::/16"),
+// disposition is how serverChosenAllowed treats a specialRanges row
+// (TestMappingTestAllowed_SpecialRanges, TestSpecialRanges_MatchIANARegistry).
+type disposition uint8
+
+const (
+	std    disposition = iota // netip's loopback, link-local or private predicate gives the scope
+	own                       // the prefix is its own scope
+	never                     // never sent to
+	public                    // public on purpose
+)
+
+type specialRangeRow struct {
+	p netip.Prefix
+	d disposition
 }
 
-// specialPrefixes are special-purpose ranges that the checks in addrScope
-// would otherwise count as public. Each is its own scope.
-var specialPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("192.0.0.0/24"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-	netip.MustParsePrefix("2001::/23"),
-	netip.MustParsePrefix("fec0::/10"),
+// specialRanges is every block of the IANA IPv4 and IPv6 Special-Purpose
+// Address Registries, as pinned in testdata, plus fec0::/10
+// (TestSpecialRanges_MatchIANARegistry). No address in a never row is sent to
+// (TestMappingTestAllowed_SpecialRanges).
+var specialRanges = []specialRangeRow{
+	{netip.MustParsePrefix("0.0.0.0/8"), own},
+	{netip.MustParsePrefix("0.0.0.0/32"), never},
+	{netip.MustParsePrefix("10.0.0.0/8"), std},
+	{netip.MustParsePrefix("100.64.0.0/10"), own},
+	{netip.MustParsePrefix("127.0.0.0/8"), std},
+	{netip.MustParsePrefix("169.254.0.0/16"), std},
+	{netip.MustParsePrefix("172.16.0.0/12"), std},
+	{netip.MustParsePrefix("192.0.0.0/24"), own},
+	{netip.MustParsePrefix("192.0.0.0/29"), own},
+	{netip.MustParsePrefix("192.0.0.8/32"), own},
+	{netip.MustParsePrefix("192.0.0.9/32"), own},
+	{netip.MustParsePrefix("192.0.0.10/32"), own},
+	{netip.MustParsePrefix("192.0.0.170/32"), own},
+	{netip.MustParsePrefix("192.0.0.171/32"), own},
+	{netip.MustParsePrefix("192.0.2.0/24"), public},
+	{netip.MustParsePrefix("192.31.196.0/24"), public},
+	{netip.MustParsePrefix("192.52.193.0/24"), public},
+	{netip.MustParsePrefix("192.88.99.0/24"), public},
+	{netip.MustParsePrefix("192.88.99.2/32"), own},
+	{netip.MustParsePrefix("192.168.0.0/16"), std},
+	{netip.MustParsePrefix("192.175.48.0/24"), public},
+	{netip.MustParsePrefix("198.18.0.0/15"), own},
+	{netip.MustParsePrefix("198.51.100.0/24"), public},
+	{netip.MustParsePrefix("203.0.113.0/24"), public},
+	{netip.MustParsePrefix("240.0.0.0/4"), own},
+	{netip.MustParsePrefix("255.255.255.255/32"), never},
+
+	{netip.MustParsePrefix("::1/128"), std},
+	{netip.MustParsePrefix("::/128"), never},
+	{netip.MustParsePrefix("::ffff:0:0/96"), never},
+	{netip.MustParsePrefix("64:ff9b::/96"), never},
+	{netip.MustParsePrefix("64:ff9b:1::/48"), never},
+	{netip.MustParsePrefix("100::/64"), never},
+	{netip.MustParsePrefix("100:0:0:1::/64"), never},
+	{netip.MustParsePrefix("2001::/23"), own},
+	{netip.MustParsePrefix("2001::/32"), never},
+	{netip.MustParsePrefix("2001:1::1/128"), own},
+	{netip.MustParsePrefix("2001:1::2/128"), own},
+	{netip.MustParsePrefix("2001:1::3/128"), own},
+	{netip.MustParsePrefix("2001:2::/48"), own},
+	{netip.MustParsePrefix("2001:3::/32"), own},
+	{netip.MustParsePrefix("2001:4:112::/48"), own},
+	{netip.MustParsePrefix("2001:10::/28"), own},
+	{netip.MustParsePrefix("2001:20::/28"), own},
+	{netip.MustParsePrefix("2001:30::/28"), own},
+	{netip.MustParsePrefix("2001:db8::/32"), public},
+	{netip.MustParsePrefix("2002::/16"), never},
+	{netip.MustParsePrefix("2620:4f:8000::/48"), public},
+	{netip.MustParsePrefix("3fff::/20"), public},
+	{netip.MustParsePrefix("5f00::/16"), never},
+	{netip.MustParsePrefix("fc00::/7"), std},
+	{netip.MustParsePrefix("fe80::/10"), std},
+	{netip.MustParsePrefix("fec0::/10"), own}, // off-registry: deprecated site-local, RFC 3879
 }
 
+// specialRange returns the index of the longest row of specialRanges that
+// contains a and passes keep, or -1.
+func specialRange(a netip.Addr, keep func(disposition) bool) int {
+	best := -1
+	for i, r := range specialRanges {
+		if keep(r.d) && r.p.Contains(a) && (best < 0 || r.p.Bits() > specialRanges[best].p.Bits()) {
+			best = i
+		}
+	}
+	return best
+}
+
+func isNever(d disposition) bool  { return d == never }
+func notNever(d disposition) bool { return d != never }
+
+// addrScope gives the scope serverChosenAllowed compares. A never row bars
+// sending, not a scope, so an address in one takes the scope of the row around
+// it, if any (TestMappingTestAllowed).
 func addrScope(a netip.Addr) int {
+	a = a.WithZone("")
 	switch {
 	case a.IsLoopback():
 		return 0
@@ -235,10 +312,8 @@ func addrScope(a netip.Addr) int {
 	case a.IsPrivate():
 		return 2
 	}
-	for i, p := range specialPrefixes {
-		if p.Contains(a) {
-			return 4 + i
-		}
+	if i := specialRange(a, notNever); i >= 0 && specialRanges[i].d == own {
+		return 4 + i
 	}
 	return scopePublic
 }

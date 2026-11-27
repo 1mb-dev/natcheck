@@ -856,6 +856,8 @@ func TestMappingTestAllowed(t *testing.T) {
 		{"NAT64 target, NAT64 other", netip.MustParseAddrPort("[64:ff9b::cb00:710a]:3478"), netip.MustParseAddrPort("[64:ff9b::a00:1]:3479"), false},
 		{"6to4 target, 6to4 other", netip.MustParseAddrPort("[2002:cb00:710a::1]:3478"), netip.MustParseAddrPort("[2002:a00:1::1]:3479"), false},
 		{"NAT64 target, public IPv6 other", netip.MustParseAddrPort("[64:ff9b::cb00:710a]:3478"), netip.MustParseAddrPort("[2001:db8::11]:3479"), true},
+		{"unspecified target, public other", netip.MustParseAddrPort("0.0.0.0:3478"), netip.MustParseAddrPort("203.0.113.11:3479"), false},
+		{"Teredo target, public IPv6 other", netip.MustParseAddrPort("[2001:0:cb00:710a::1]:3478"), netip.MustParseAddrPort("[2001:db8::11]:3479"), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
