@@ -43,6 +43,10 @@ var ErrTest1Failed = errors.New("initial probe failed; cannot run §4.4 sequence
 // Package-internal: callers in this file translate it to Test{2,3}Received=false.
 var errNoResponse = errors.New("no response within deadline")
 
+// errReadFailed marks a read that failed for a reason other than its deadline,
+// so it measured nothing.
+var errReadFailed = errors.New("read")
+
 // errSendFailed marks a request that never left the host, such as a send with
 // no route. The next resolved address may still work.
 var errSendFailed = errors.New("write")
@@ -58,6 +62,10 @@ var errSendFailed = errors.New("write")
 // after the mapping probes and outside their --timeout context, so timeout is
 // its only bound.
 func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
+	return probeFilteringWith(net.ListenPacket, server, target, timeout)
+}
+
+func probeFilteringWith(listen func(network, address string) (net.PacketConn, error), server Server, target netip.AddrPort, timeout time.Duration) FilteringResult {
 	res := FilteringResult{Server: server}
 	if !target.IsValid() || target.Port() == 0 {
 		res.Err = fmt.Errorf("invalid target %v for %s:%d", target, server.Host, server.Port)
@@ -68,7 +76,7 @@ func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration)
 	remote := net.UDPAddrFromAddrPort(target)
 
 	network, listenAddr := pickNetwork(ip)
-	conn, err := net.ListenPacket(network, listenAddr)
+	conn, err := listen(network, listenAddr)
 	if err != nil {
 		res.Err = fmt.Errorf("listen %s: %w", target, err)
 		return res
@@ -100,10 +108,16 @@ func ProbeFiltering(server Server, target netip.AddrPort, timeout time.Duration)
 	// Test 3: CHANGE-PORT.
 	t3, err3 := sendBindingAndWait(context.Background(), conn, remote, perTest, &changeRequestPayload{ip: false, port: true})
 
-	// Only silence is a filtering result. Any other failure means a reply got
-	// through and the test measured nothing.
+	// Only silence is a filtering result. A failed send or read is a local
+	// fault (TestProbeFiltering_LocalFaultIsNotFiltering); any other failure is
+	// a reply that measured nothing.
 	for _, err := range []error{err2, err3} {
-		if err != nil && !errors.Is(err, errNoResponse) {
+		switch {
+		case err == nil, errors.Is(err, errNoResponse):
+		case errors.Is(err, errReadFailed), errors.Is(err, errSendFailed):
+			res.Err = err
+			return res
+		default:
 			res.Err = fmt.Errorf("%w: %w", ErrFilteringNotSupported, err)
 			return res
 		}
@@ -151,7 +165,9 @@ type changeRequestPayload struct {
 // remote (RFC 5780 §4.4: server replies from alt-IP/alt-port). Returns ctx's
 // error if ctx is done before a reply or the window's end, and errNoResponse
 // once the window ends with no matching reply, ctx done or not
-// (TestSendBindingAndWait_FullWindowIsNoResponseAfterCtxEnds). Discards stale
+// (TestSendBindingAndWait_FullWindowIsNoResponseAfterCtxEnds). Otherwise a
+// read that fails for any reason but its deadline returns errReadFailed
+// (TestSendBindingAndWait_ReadErrorIsNotSilence). Discards stale
 // packets with non-matching transaction IDs (e.g., late responses from a prior
 // test) and keeps reading. The result records the reply's source; judging it
 // is the caller's job.
@@ -172,7 +188,7 @@ func sendBindingAndWait(ctx context.Context, conn net.PacketConn, remote net.Add
 	sent := time.Now()
 	end := sent.Add(wait)
 	if err := conn.SetWriteDeadline(end); err != nil {
-		return nil, fmt.Errorf("set write deadline: %w", err)
+		return nil, fmt.Errorf("%w: set write deadline: %w", errSendFailed, err)
 	}
 	if _, err := conn.WriteTo(req.Raw, remote); err != nil {
 		return nil, fmt.Errorf("%w: %w", errSendFailed, err)
@@ -193,7 +209,10 @@ func sendBindingAndWait(ctx context.Context, conn net.PacketConn, remote net.Add
 			if ctxErr := ctx.Err(); ctxErr != nil && time.Now().Before(end) {
 				return nil, ctxErr
 			}
-			if readEnd.Equal(end) || !errors.Is(err, os.ErrDeadlineExceeded) {
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				return nil, fmt.Errorf("%w: %w", errReadFailed, err)
+			}
+			if readEnd.Equal(end) {
 				return nil, errNoResponse
 			}
 			_, _ = conn.WriteTo(req.Raw, remote)

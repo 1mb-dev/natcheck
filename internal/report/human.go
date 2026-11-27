@@ -45,7 +45,7 @@ func warningText(id string) string {
 	case classify.WarnMixedAddressFamilyProbes:
 		return "Mapping classification spans IPv4 and IPv6; each family observes its own NAT."
 	case classify.WarnHairpinUntested:
-		return "Hairpinning not tested (local socket setup or STUN probe failed, or --timeout ran out)."
+		return "Hairpinning not tested (local socket setup, STUN probe or listen read failed, or --timeout ran out)."
 	case classify.WarnIPv4Untested:
 		return "IPv4 not tested; this verdict covers IPv6 only."
 	case classify.WarnInsufficientServerDiversity:

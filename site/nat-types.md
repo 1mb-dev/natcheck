@@ -96,7 +96,7 @@ On CGNAT, natcheck reports `unknown` rather than guessing. Behind a CGNAT carrie
 
 ## Hairpinning
 
-Some NATs forward packets sent to your own public mapped endpoint back to another host behind the same NAT — a "hairpin." Useful for two peers on the same LAN finding each other through their shared public IP. natcheck detects this by allocating two local UDP sockets, learning each one's public-mapped endpoint via STUN, and sending a tagged packet from socket A to socket B's mapped endpoint. If B receives it, hairpinning is `true`; if not, `false`. If local socket setup or the STUN probe fails, or `--timeout` ends before the listen does, the result is `null` and `hairpin_untested` appears in `warnings[]`.
+Some NATs forward packets sent to your own public mapped endpoint back to another host behind the same NAT — a "hairpin." Useful for two peers on the same LAN finding each other through their shared public IP. natcheck detects this by allocating two local UDP sockets, learning each one's public-mapped endpoint via STUN, and sending a tagged packet from socket A to socket B's mapped endpoint. If B receives it, hairpinning is `true`; if not, `false`. If local socket setup, the STUN probe or the listen read fails, or `--timeout` ends before the listen does, the result is `null` and `hairpin_untested` appears in `warnings[]`.
 
 The result is informational — it doesn't shift the WebRTC forecast, since hairpinning matters for same-NAT (LAN) peers but most direct-P2P WebRTC traffic is inter-NAT.
 

@@ -377,7 +377,7 @@ Verbose output emits coded warning constants in `warnings[]`:
 | Constant | Condition |
 |---|---|
 | `WarnFilteringSkippedNoChangeRequest` | Server didn't advertise `OTHER-ADDRESS` |
-| `WarnHairpinUntested` | Local socket setup or STUN probe failed, or `--timeout` ran out; hairpinning not measured |
+| `WarnHairpinUntested` | Local socket setup, STUN probe or listen read failed, or `--timeout` ran out; hairpinning not measured |
 
 No free-text warning strings.
 
@@ -397,7 +397,7 @@ Outcome mapping:
 | not received | received | address-dependent |
 | not received | not received | address-and-port-dependent |
 
-Each test waits half the filtering budget (750ms by default). When that window is longer than 500ms, the request is resent at 500ms with the same transaction ID. For Test 2 or 3, silence for the whole window reads as not received (`TestProbeFiltering_ResendsLostChangeRequests`).
+Each test waits half the filtering budget (750ms by default). When that window is longer than 500ms, the request is resent at 500ms with the same transaction ID. For Test 2 or 3, silence for the whole window reads as not received (`TestProbeFiltering_ResendsLostChangeRequests`); a send that fails, or a read that fails for any reason but its deadline, leaves filtering untested (`TestProbeFiltering_LocalFaultIsNotFiltering`).
 
 A Test 2 or Test 3 reply that lacks the change asked for, or an error reply, means the server ignored or rejected `CHANGE-REQUEST`, so neither test measured anything and filtering stays untested. Replies are compared to the target, not `OTHER-ADDRESS`, because provider topologies can reply from an address other than the advertised one.
 
@@ -416,7 +416,7 @@ Result:
 
 - Tagged packet arrives → `hairpinning: true`
 - Timeout → `hairpinning: false`
-- A or B's STUN probe failed, or `--timeout` ended before the listen did → `hairpinning: null` + `WarnHairpinUntested` (`TestRealHairpinRecv_DeadlineCutIsUntested`, `TestProbeHairpinning_ContextCutIsUntested`)
+- A or B's STUN probe failed, a listen read failed for a reason other than its deadline, or `--timeout` ended before the listen did → `hairpinning: null` + `WarnHairpinUntested` (`TestRealHairpinRecv_ReadErrorIsNotFalse`, `TestRealHairpinRecv_DeadlineCutIsUntested`, `TestProbeHairpinning_ContextCutIsUntested`)
 
 Documented limitation: false-negative possible if the NAT applies port-restricted filtering on the hairpin path. Test case in `internal/probe/hairpin_test.go` simulates this scenario via the existing fake-responder pattern.
 

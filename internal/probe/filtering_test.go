@@ -395,6 +395,90 @@ func TestProbeFiltering_ResendsLostChangeRequests(t *testing.T) {
 	}
 }
 
+// failAfterReplyConn passes I/O through until a read returns a packet, then
+// fails every call to the method named by fail: Test 1 completes and Tests 2
+// and 3 cannot read or send.
+type failAfterReplyConn struct {
+	net.PacketConn
+	fail    string
+	mu      sync.Mutex
+	replied bool
+}
+
+var (
+	errWriteTo          = errors.New("write failed")
+	errSetWriteDeadline = errors.New("set write deadline failed")
+)
+
+func (c *failAfterReplyConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	n, addr, err := c.PacketConn.ReadFrom(b)
+	if err == nil {
+		c.mu.Lock()
+		c.replied = true
+		c.mu.Unlock()
+	}
+	return n, addr, err
+}
+
+func (c *failAfterReplyConn) failing() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.replied
+}
+
+func (c *failAfterReplyConn) SetReadDeadline(t time.Time) error {
+	if c.fail == "SetReadDeadline" && c.failing() {
+		return errSetDeadline
+	}
+	return c.PacketConn.SetReadDeadline(t)
+}
+
+func (c *failAfterReplyConn) SetWriteDeadline(t time.Time) error {
+	if c.fail == "SetWriteDeadline" && c.failing() {
+		return errSetWriteDeadline
+	}
+	return c.PacketConn.SetWriteDeadline(t)
+}
+
+func (c *failAfterReplyConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if c.fail == "WriteTo" && c.failing() {
+		return 0, errWriteTo
+	}
+	return c.PacketConn.WriteTo(b, addr)
+}
+
+// TestProbeFiltering_LocalFaultIsNotFiltering: a Test 2/3 read or send that
+// fails is neither silence (a filtering verdict) nor ErrFilteringNotSupported.
+func TestProbeFiltering_LocalFaultIsNotFiltering(t *testing.T) {
+	for _, tc := range []struct {
+		fail string
+		want error
+	}{
+		{"SetReadDeadline", errSetDeadline},
+		{"SetWriteDeadline", errSetWriteDeadline},
+		{"WriteTo", errWriteTo},
+	} {
+		t.Run(tc.fail, func(t *testing.T) {
+			f := newFakeFilteringServer(t)
+			s := f.primaryServer()
+			listen := func(network, address string) (net.PacketConn, error) {
+				c, err := net.ListenPacket(network, address)
+				if err != nil {
+					return nil, err
+				}
+				return &failAfterReplyConn{PacketConn: c, fail: tc.fail}, nil
+			}
+			res := probeFilteringWith(listen, s, netip.AddrPortFrom(netip.MustParseAddr(s.Host), uint16(s.Port)), time.Second)
+			if !errors.Is(res.Err, tc.want) || errors.Is(res.Err, ErrFilteringNotSupported) || errors.Is(res.Err, ErrTest1Failed) {
+				t.Fatalf("Err = %v, want %v alone", res.Err, tc.want)
+			}
+			if res.Test2Received || res.Test3Received {
+				t.Errorf("Test2Received = %v, Test3Received = %v; want false, false", res.Test2Received, res.Test3Received)
+			}
+		})
+	}
+}
+
 // startChangeIgnoringServer advertises OTHER-ADDRESS but always replies from its
 // own address. reply decides which requests get an answer.
 func startChangeIgnoringServer(t *testing.T, reply func(req []byte) bool) Server {

@@ -350,6 +350,39 @@ func TestSendBindingAndWait_FullWindowIsNoResponseAfterCtxEnds(t *testing.T) {
 	}
 }
 
+// failDeadlineConn fails every SetReadDeadline.
+type failDeadlineConn struct{ net.PacketConn }
+
+var errSetDeadline = errors.New("set read deadline failed")
+
+func (failDeadlineConn) SetReadDeadline(time.Time) error { return errSetDeadline }
+
+func TestSendBindingAndWait_ReadErrorIsNotSilence(t *testing.T) {
+	t.Parallel()
+	c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	_, err = sendBindingAndWait(context.Background(), failDeadlineConn{c}, c.LocalAddr(), 100*time.Millisecond, nil)
+	if !errors.Is(err, errSetDeadline) {
+		t.Fatalf("err = %v, want %v", err, errSetDeadline)
+	}
+}
+
+func TestRealHairpinRecv_ReadErrorIsNotFalse(t *testing.T) {
+	t.Parallel()
+	c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = c.Close() }()
+	got, err := realHairpinRecv(context.Background(), failDeadlineConn{c}, []byte("tag"), 100*time.Millisecond)
+	if got || !errors.Is(err, errSetDeadline) {
+		t.Fatalf("got %v, %v; want false, %v", got, err, errSetDeadline)
+	}
+}
+
 // TestProbeHairpinning_InvalidServer covers the input-validation path:
 // empty host, zero port, out-of-range port.
 func TestProbeHairpinning_InvalidServer(t *testing.T) {
